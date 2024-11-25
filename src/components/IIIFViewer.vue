@@ -60,11 +60,32 @@
       </div>
     </div>
 
-    <!-- PDF-Style Viewer Section -->
+    <!-- Page Navigation -->
+    <div class="navigation-bar">
+      <button :disabled="currentPage === 0" @click="prevPage">⬅️ Prev</button>
+      <div class="page-input-container">
+        <label for="pageInput">Page:</label>
+        <input
+          id="pageInput"
+          type="number"
+          v-model.number="pageInput"
+          @blur="goToPage()"
+          @keyup.enter="goToPage()"
+          :max="totalPages"
+          :min="1"
+        />
+        <span>/ {{ totalPages }}</span>
+      </div>
+      <button :disabled="currentPage === totalPages - 1" @click="nextPage">
+        Next ➡️
+      </button>
+    </div>
+
+    <!-- Viewer Section -->
     <div class="pdf-viewer">
       <object
-        v-if="imageSrc"
-        :data="imageSrc"
+        v-if="currentImage"
+        :data="currentImage"
         type="image/jpeg"
         class="pdf-object"
       >
@@ -92,9 +113,23 @@ export default {
   },
   data() {
     return {
-      imageSrc: "",
-      annotating: false,
+      images: [], // Array to store all image URLs
+      currentPage: 0, // Index of the current page being displayed
+      pageInput: 1, // Value bound to the text box for page input
     };
+  },
+  computed: {
+    currentImage() {
+      return this.images[this.currentPage] || null; // Get the image URL for the current page
+    },
+    totalPages() {
+      return this.images.length;
+    },
+  },
+  watch: {
+    currentPage(newValue) {
+      this.pageInput = newValue + 1; // Keep the text box value in sync with currentPage
+    },
   },
   async created() {
     if (!this.source) {
@@ -104,119 +139,59 @@ export default {
       return;
     }
 
-    console.log("Source received:", this.source);
-
     if (this.source.endsWith("manifest.json")) {
-      await this.fetchIIIFImage(this.source);
+      await this.fetchIIIFImages(this.source);
     } else {
-      this.imageSrc = this.source;
-      this.annotating = true;
+      this.images = [this.source]; // If not a manifest, just load the single image
     }
   },
   methods: {
-    async fetchIIIFImage(manifestUrl) {
+    async fetchIIIFImages(manifestUrl) {
       try {
         const response = await fetch(manifestUrl);
         if (!response.ok) {
           throw new Error("Failed to fetch IIIF manifest.");
         }
         const manifest = await response.json();
-        console.log("IIIF manifest fetched:", manifest);
 
-        const firstCanvas = manifest.sequences?.[0]?.canvases?.[0];
-        if (
-          firstCanvas &&
-          firstCanvas.images?.[0]?.resource?.service?.["@id"]
-        ) {
-          const iiifImageApiUrl = firstCanvas.images[0].resource.service["@id"];
-          this.imageSrc = `${iiifImageApiUrl}/full/full/0/default.jpg`;
-          this.annotating = true;
-        } else {
-          alert("No image found in IIIF manifest.");
+        // Extract all canvas images from the manifest
+        const canvases = manifest.sequences?.[0]?.canvases || [];
+        this.images = canvases
+          .map((canvas) => canvas.images?.[0]?.resource?.service?.["@id"])
+          .filter((id) => id) // Filter out invalid IDs
+          .map((id) => `${id}/full/full/0/default.jpg`); // Generate IIIF image URLs
+
+        if (this.images.length === 0) {
+          alert("No images found in IIIF manifest.");
         }
       } catch (error) {
         alert("Error fetching IIIF manifest: " + error.message);
       }
     },
+    nextPage() {
+      if (this.currentPage < this.totalPages - 1) {
+        this.currentPage++;
+      }
+    },
+    prevPage() {
+      if (this.currentPage > 0) {
+        this.currentPage--;
+      }
+    },
+    goToPage() {
+      // Validate the page input and update the currentPage
+      const newPage =
+        Math.max(1, Math.min(this.pageInput, this.totalPages)) - 1;
+      this.currentPage = newPage;
+    },
     selectTool(tool) {
       console.log(`Selected tool: ${tool}`);
-    },
-    saveAnnotations() {
-      console.log("Annotations saved.");
-    },
-    clearAnnotations() {
-      console.log("Annotations cleared.");
-    },
-    addMorePages() {
-      console.log("Add more pages.");
-    },
-    discardPage() {
-      console.log("Discard current page.");
     },
   },
 };
 </script>
 
 <style scoped>
-.viewer-container {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  background-color: #f1f1f1;
-}
-
-.top-bar {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background-color: #f1f1f1;
-  border-bottom: 1px solid #ddd;
-  padding: 10px 0;
-}
-
-.logo {
-  margin-right: 20px;
-  height: 40px;
-}
-
-.toolbar {
-  display: flex;
-  gap: 20px;
-}
-
-.toolbar-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  font-size: 12px;
-  color: #333;
-  cursor: pointer;
-  text-align: center;
-}
-
-.toolbar-item i {
-  font-size: 20px;
-  margin-bottom: 5px;
-}
-
-.toolbar-item:hover {
-  color: #007bff;
-}
-
-.pdf-viewer {
-  flex: 1;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  overflow: hidden;
-}
-
-.pdf-object {
-  width: 100%;
-  height: 100%;
-  border: none;
-  object-fit: contain;
-}
 .viewer-container {
   display: flex;
   flex-direction: column;
@@ -261,6 +236,28 @@ export default {
 
 .toolbar-item:hover {
   color: #007bff;
+}
+
+.navigation-bar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 10px 0;
+  gap: 10px;
+}
+
+.page-input-container {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.page-input-container input {
+  width: 50px;
+  text-align: center;
+  padding: 5px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
 }
 
 .pdf-viewer {
