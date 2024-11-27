@@ -63,17 +63,22 @@
         Next ➡️
       </button>
     </div>
+
     <!-- Viewer Section -->
-    <div class="pdf-viewer">
+    <div
+      class="pdf-viewer"
+      @mousedown="startTrace"
+      @mousemove="trace"
+      @mouseup="endTrace"
+      @mouseleave="endTrace"
+      ref="viewer"
+    >
       <img
         v-if="currentImage"
         :src="currentImage"
         ref="image"
-        @mousedown="startTrace"
-        @mousemove="trace"
-        @mouseup="endTrace"
-        @load="handleImageLoad"
         class="image-viewer"
+        @load="handleImageLoad"
         :style="{ cursor: traceModeActive ? 'crosshair' : 'default' }"
       />
 
@@ -92,8 +97,8 @@
       <!-- Cropped Image Pop-up -->
       <div v-if="croppedImage" class="blurred-background">
         <div class="svg-popup">
-          <h3>Cropped Image</h3>
-          <img :src="croppedImage" alt="Cropped Image" />
+          <h3>Cropped SVG Area</h3>
+          <div v-html="croppedSvg"></div>
           <div class="popup-buttons">
             <button @click="saveCroppedImage">Save</button>
             <button @click="discardCroppedImage">Discard</button>
@@ -103,6 +108,7 @@
     </div>
   </div>
 </template>
+
 <script>
 export default {
   props: {
@@ -113,22 +119,24 @@ export default {
   },
   data() {
     return {
-      images: [], // Store all image URLs
-      currentPage: 0, // Current page index
-      pageInput: 1, // Input for page navigation
-      traceModeActive: false, // Trace Mode status
-      showTraceMessage: true, // Show trace message initially
-      startPoint: null, // Starting point for the crop
-      currentSquare: null, // The square being drawn
-      croppedImage: null, // Cropped image to display in the pop-up
-      squareVisible: false, // Control square visibility
-      imageLoaded: false, // Check if image has loaded
-      annotations: [], // Store annotations like highlights or comments
+      images: [],
+      currentPage: 0,
+      pageInput: 1,
+      traceModeActive: false,
+      startPoint: null,
+      currentSquare: null,
+      croppedSvg: null,
+      croppedImage: null,
+      squareVisible: false,
+      imageLoaded: false,
+      croppingStarted: false,
+      annotations: [],
+      popupDimensions: { width: 0, height: 0 }, // Popup dimensions for SVG
     };
   },
   computed: {
     currentImage() {
-      return this.images[this.currentPage] || null; // Get current image URL
+      return this.images[this.currentPage] || null;
     },
     totalPages() {
       return this.images.length;
@@ -136,15 +144,7 @@ export default {
   },
   watch: {
     currentPage(newValue) {
-      this.pageInput = newValue + 1; // Sync page number
-    },
-    traceModeActive(active) {
-      if (active) {
-        this.showTraceMessage = true;
-        setTimeout(() => {
-          this.showTraceMessage = false;
-        }, 3000);
-      }
+      this.pageInput = newValue + 1;
     },
   },
   async created() {
@@ -158,7 +158,7 @@ export default {
     if (this.source.endsWith("manifest.json")) {
       await this.fetchIIIFImages(this.source);
     } else {
-      this.images = [this.source]; // Load a single image
+      this.images = [this.source];
     }
   },
   methods: {
@@ -181,6 +181,7 @@ export default {
         alert("Error fetching IIIF manifest: " + error.message);
       }
     },
+
     nextPage() {
       if (this.currentPage < this.totalPages - 1) this.currentPage++;
     },
@@ -194,102 +195,100 @@ export default {
     },
     selectTool(tool) {
       this.traceModeActive = tool === "trace";
-      this.croppedImage = null; // Clear previous crop
+      this.croppedImage = null;
     },
+
+    handleImageLoad() {
+      this.imageLoaded = true;
+    },
+
     startTrace(event) {
       if (!this.traceModeActive || !this.imageLoaded) return;
 
-      const imageElement = this.$refs.image;
-      const rect = imageElement.getBoundingClientRect();
+      const { x, y } = this.getMousePosition(event);
 
-      // Ensure click is within bounds of the image
-      if (
-        event.clientX < rect.left ||
-        event.clientX > rect.right ||
-        event.clientY < rect.top ||
-        event.clientY > rect.bottom
-      ) {
-        return;
+      if (!this.croppingStarted) {
+        this.startPoint = { x, y };
+        this.currentSquare = { x, y, width: 0, height: 0 };
+        this.squareVisible = true;
+        this.croppingStarted = true;
+      } else {
+        this.generateCroppedSvg();
+        this.squareVisible = false;
+        this.croppingStarted = false;
+        this.traceModeActive = false; // Disable trace mode after cropping
+        console.log("Mouse Position:", { x, y });
+        console.log("Square Position:", this.currentSquare);
       }
-
-      // Calculate relative coordinates
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
-
-      this.startPoint = { x, y };
-      this.currentSquare = { x, y, width: 0, height: 0 };
-      this.squareVisible = true;
     },
+
     trace(event) {
-      if (!this.traceModeActive || !this.startPoint) return;
+      if (!this.croppingStarted || !this.startPoint) return;
 
-      const imageElement = this.$refs.image;
-      const rect = imageElement.getBoundingClientRect();
-
-      // Ensure movement is within bounds of the image
-      const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
-      const y = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
-
-      const width = Math.abs(x - this.startPoint.x);
-      const height = Math.abs(y - this.startPoint.y);
+      const { x, y } = this.getMousePosition(event);
 
       this.currentSquare = {
-        x: Math.min(this.startPoint.x, x),
-        y: Math.min(this.startPoint.y, y),
-        width,
-        height,
+        x: this.startPoint.x,
+        y: this.startPoint.y,
+        width: Math.abs(x - this.startPoint.x),
+        height: Math.abs(y - this.startPoint.y),
       };
     },
-    endTrace() {
-      if (!this.traceModeActive || !this.currentSquare) return;
 
-      this.cropImage();
-      this.squareVisible = false;
-    },
-    cropImage() {
+    getMousePosition(event) {
       const imageElement = this.$refs.image;
-      const canvas = document.createElement("canvas");
-      const context = canvas.getContext("2d");
+      const rect = imageElement.getBoundingClientRect();
 
-      // Scale factor for natural image size
+      return {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      };
+    },
+
+    generateCroppedSvg() {
+      const { x, y, width, height } = this.currentSquare;
+
+      const imageElement = this.$refs.image;
       const naturalWidth = imageElement.naturalWidth;
       const naturalHeight = imageElement.naturalHeight;
-      const displayWidth = imageElement.width;
-      const displayHeight = imageElement.height;
+      const rect = imageElement.getBoundingClientRect();
 
-      const scaleX = naturalWidth / displayWidth;
-      const scaleY = naturalHeight / displayHeight;
+      // Scale the coordinates to the natural dimensions
+      const scaleX = naturalWidth / rect.width;
+      const scaleY = naturalHeight / rect.height;
 
-      // Set canvas size
-      canvas.width = this.currentSquare.width * scaleX;
-      canvas.height = this.currentSquare.height * scaleY;
+      const scaledX = x * scaleX;
+      const scaledY = y * scaleY;
+      const scaledWidth = width * scaleX;
+      const scaledHeight = height * scaleY;
 
-      // Draw cropped area on canvas
-      context.drawImage(
-        imageElement,
-        this.currentSquare.x * scaleX,
-        this.currentSquare.y * scaleY,
-        this.currentSquare.width * scaleX,
-        this.currentSquare.height * scaleY,
-        0,
-        0,
-        canvas.width,
-        canvas.height
-      );
+      // Ensure the SVG is 2/3 the size of the PDF viewer
+      const viewerWidth = this.$refs.viewer.clientWidth;
+      const viewerHeight = this.$refs.viewer.clientHeight;
+      const svgWidth = viewerWidth * 0.66;
+      const svgHeight = viewerHeight * 0.66;
 
-      // Convert canvas to image data
-      this.croppedImage = canvas.toDataURL();
+      this.croppedSvg = `
+      <svg width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${scaledWidth} ${scaledHeight}" xmlns="http://www.w3.org/2000/svg">
+      <image href="${
+        this.currentImage
+      }" x="${-scaledX}" y="${-scaledY}" width="${naturalWidth}" height="${naturalHeight}" />
+      </svg>
+      `;
+
+      this.popupDimensions = { width: svgWidth, height: svgHeight };
+      this.croppedImage = true;
     },
+
     saveCroppedImage() {
-      console.log("Image saved.");
-      this.croppedImage = null; // Clear after save
+      console.log("SVG image saved.");
+      this.croppedImage = null;
     },
+
     discardCroppedImage() {
-      this.croppedImage = null; // Clear pop-up
+      this.croppedImage = null;
     },
-    saveAnnotations() {
-      console.log("Annotations saved:", this.annotations);
-    },
+
     clearAnnotations() {
       if (confirm("Are you sure you want to clear all annotations?")) {
         this.annotations = [];
@@ -306,12 +305,10 @@ export default {
         this.currentPage = Math.min(this.currentPage, this.images.length - 1);
       }
     },
-    handleImageLoad() {
-      this.imageLoaded = true; // Image is fully loaded
-    },
   },
 };
 </script>
+
 <style scoped>
 .viewer-container {
   display: flex;
@@ -379,7 +376,6 @@ export default {
   display: flex;
   justify-content: center;
   align-items: center;
-  overflow: hidden;
 }
 
 .pdf-viewer img {
@@ -391,47 +387,22 @@ export default {
 .drawing-square {
   position: absolute;
   border: 2px dashed #007bff;
-  background-color: rgba(0, 123, 255, 0.2); /* Light blue overlay */
+  background-color: rgba(0, 123, 255, 0.2);
+  pointer-events: none;
 }
 
-.pdf-object {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.trace-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(255, 255, 255, 0.8);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.trace-message {
-  font-size: 1.5rem;
-  font-weight: bold;
-  color: #333;
-}
-
-/* Blurred background for when the SVG square is shown */
 .blurred-background {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  backdrop-filter: blur(8px); /* Blur */
   display: flex;
   justify-content: center;
   align-items: center;
+  backdrop-filter: blur(8px);
 }
 
-/* Popup for the drawn square (SVG) */
 .svg-popup {
   background-color: white;
   padding: 20px;
@@ -441,50 +412,7 @@ export default {
   flex-direction: column;
   justify-content: center;
   align-items: center;
-}
-
-.svg-popup img {
-  max-width: 100%;
-  max-height: 100%;
-  border: 1px solid #ddd;
-}
-
-.popup-buttons {
-  margin-top: 10px;
-  display: flex;
-  gap: 10px;
-}
-
-.popup-buttons button {
-  background-color: #007bff;
-  color: white;
-  border: none;
-  padding: 10px 15px;
-  border-radius: 5px;
-  cursor: pointer;
-}
-
-.popup-buttons button:hover {
-  background-color: #0056b3;
-}
-
-.popup-buttons button:active {
-  background-color: #004085; /* Even darker on click */
-}
-
-.image-viewer {
-  position: relative;
-  max-width: 100%;
-  max-height: 100%;
-}
-
-.cropped-image-popup {
-  position: fixed;
-  top: 10%;
-  left: 10%;
-  background: white;
-  padding: 20px;
-  border: 1px solid #ddd;
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+  max-width: 66%;
+  max-height: 66%;
 }
 </style>
