@@ -77,6 +77,18 @@
         }"
       />
 
+      <!-- Cropping Rectangle -->
+      <div
+        v-if="croppingStarted && currentSquare"
+        class="cropping-rectangle"
+        :style="{
+          left: `${currentSquare.x}px`,
+          top: `${currentSquare.y}px`,
+          width: `${currentSquare.width}px`,
+          height: `${currentSquare.height}px`,
+        }"
+      ></div>
+
       <!-- Cropped Image Pop-up -->
       <div
         v-if="croppedImage && !measurePopupVisible"
@@ -351,7 +363,9 @@ export default {
       const { x, y } = this.getMousePosition(event);
 
       this.currentSquare = {
-        x: Math.min(x, this.startPoint.x),
+        x:
+          Math.min(x, this.startPoint.x) +
+          this.$refs.image.getBoundingClientRect().left,
         y: Math.min(y, this.startPoint.y),
         width: Math.abs(x - this.startPoint.x),
         height: Math.abs(y - this.startPoint.y),
@@ -371,7 +385,7 @@ export default {
       const scaleX = naturalWidth / rect.width;
       const scaleY = naturalHeight / rect.height;
 
-      const scaledX = x * scaleX;
+      const scaledX = (x - rect.left) * scaleX;
       const scaledY = y * scaleY;
       const scaledWidth = width * scaleX;
       const scaledHeight = height * scaleY;
@@ -398,11 +412,36 @@ export default {
       this.dynamicTracePath = `M${x},${y}`; // Initialize dynamic path
     },
     generateRandomColor() {
-      const hue = Math.floor(Math.random() * 360);
-      const saturation = 70 + Math.random() * 30;
-      const lightness = 50 + Math.random() * 10;
-      return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+      // Define color-blind friendly palette (high contrast and accessible colors)
+      const colorBlindFriendlyPalette = [
+        "#E69F00", // Orange
+        "#56B4E9", // Sky Blue
+        "#009E73", // Green
+        "#F0E442", // Yellow
+        "#0072B2", // Blue
+        "#D55E00", // Vermillion
+        "#CC79A7", // Reddish Purple
+      ];
+
+      // Track the last generated color
+      if (!this.lastColor) {
+        this.lastColor = null; // Initialize lastColor on first call
+      }
+
+      // Filter out the last color to avoid repetition
+      const availableColors = colorBlindFriendlyPalette.filter(
+        (color) => color !== this.lastColor
+      );
+
+      // Randomly pick a color from the filtered list
+      const randomIndex = Math.floor(Math.random() * availableColors.length);
+      const selectedColor = availableColors[randomIndex];
+
+      // Update lastColor and return the selected color
+      this.lastColor = selectedColor;
+      return selectedColor;
     },
+
     draw(event) {
       if (!this.currentStroke) return;
       const { x, y } = this.getPopupMousePosition(event);
