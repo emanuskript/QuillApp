@@ -61,8 +61,6 @@
       class="pdf-viewer"
       @mousedown="startTrace"
       @mousemove="trace"
-      @mouseup="endTrace"
-      @mouseleave="endTrace"
       ref="viewer"
     >
       <img
@@ -73,9 +71,102 @@
         @load="handleImageLoad"
         :style="{
           cursor:
-            traceModeActive || measureModeActive ? 'crosshair' : 'default',
+            traceModeActive ||
+            highlightModeActive ||
+            underlineModeActive ||
+            measureModeActive
+              ? 'crosshair'
+              : 'default',
         }"
       />
+
+      <!-- Render existing highlights -->
+      <div
+        v-for="(annotation, index) in highlightAnnotations"
+        :key="'highlight-' + index"
+        class="highlight-rectangle"
+        :style="{
+          left: `${annotation.x}px`,
+          top: `${annotation.y}px`,
+          width: `${annotation.width}px`,
+          height: `${annotation.height}px`,
+          position: 'absolute',
+        }"
+      ></div>
+
+      <!-- Render existing underlines -->
+      <svg class="underline-svg" style="position: absolute">
+        <line
+          v-for="(annotation, index) in underlineAnnotations"
+          :key="'underline-' + index"
+          :x1="annotation.startX"
+          :y1="annotation.startY"
+          :x2="annotation.endX"
+          :y2="annotation.endY"
+          stroke="blue"
+          stroke-width="2"
+        ></line>
+      </svg>
+
+      <!-- Render dynamic highlight rectangle -->
+      <div
+        v-if="highlightModeActive && currentSquare"
+        class="highlight-rectangle"
+        :style="{
+          left: `${currentSquare.x}px`,
+          top: `${currentSquare.y}px`,
+          width: `${currentSquare.width}px`,
+          height: `${currentSquare.height}px`,
+          position: 'absolute',
+        }"
+      ></div>
+
+      <!-- Render dynamic underline -->
+      <svg class="underline-svg" style="position: absolute">
+        <line
+          v-if="underlineModeActive && currentUnderline"
+          :x1="currentUnderline.startX"
+          :y1="currentUnderline.startY"
+          :x2="currentUnderline.endX"
+          :y2="currentUnderline.endY"
+          stroke="blue"
+          stroke-width="2"
+        ></line>
+      </svg>
+
+      <!-- Comments -->
+      <div
+        v-for="(comment, index) in comments"
+        :key="'comment-' + index"
+        class="comment-box"
+        :style="{ top: comment.y + 'px', left: comment.x + 'px' }"
+        @mouseenter="showComment(comment)"
+        @mouseleave="hideComment"
+      >
+        💬
+      </div>
+
+      <!-- Comment Tooltip -->
+      <div
+        v-if="tooltipVisible"
+        class="comment-tooltip"
+        :style="{
+          top: tooltipPosition.y + 'px',
+          left: tooltipPosition.x + 'px',
+        }"
+      >
+        {{ tooltipContent }}
+      </div>
+
+      <!-- Comment Input -->
+      <div v-if="showCommentInput" class="comment-input">
+        <textarea
+          v-model="currentCommentText"
+          placeholder="Add your comment..."
+        ></textarea>
+        <button @click="addComment">Add</button>
+        <button @click="cancelComment">Cancel</button>
+      </div>
 
       <!-- Cropping Rectangle -->
       <div
@@ -86,6 +177,7 @@
           top: `${currentSquare.y}px`,
           width: `${currentSquare.width}px`,
           height: `${currentSquare.height}px`,
+          position: 'absolute',
         }"
       ></div>
 
@@ -212,6 +304,7 @@
     </div>
   </div>
 </template>
+
 <script>
 export default {
   props: {
@@ -242,9 +335,28 @@ export default {
       calculatedAngle: 0, // Measured angle between the points
       measureModeActive: false,
       traceModeActive: false,
+      commentModeActive: false,
+      highlightModeActive: false, // Tracks if highlight mode is active
+      underlineModeActive: false, // Tracks if underline mode is active
+      currentUnderline: null, // Tracks current underline line being drawn
+      currentHighlight: null, // Tracks current highlight box being drawn
+      showCommentInput: false,
+      currentCommentText: "",
+      currentCommentPosition: null,
+      comments: [],
     };
   },
   computed: {
+    highlightAnnotations() {
+      return this.annotations.filter(
+        (annotation) => annotation.type === "highlight"
+      );
+    },
+    underlineAnnotations() {
+      return this.annotations.filter(
+        (annotation) => annotation.type === "underline"
+      );
+    },
     currentImage() {
       return this.images[this.currentPage] || null;
     },
@@ -316,7 +428,10 @@ export default {
       this.strokes = [];
     },
     nextPage() {
-      if (this.currentPage < this.totalPages - 1) this.currentPage++;
+      if (this.currentPage < this.totalPages - 1) {
+        this.currentPage++;
+        this.clearAnnotations();
+      }
     },
     prevPage() {
       if (this.currentPage > 0) this.currentPage--;
@@ -327,6 +442,7 @@ export default {
       this.currentPage = newPage;
     },
     selectTool(tool) {
+      this.currentTool = tool;
       if (tool === "trace") {
         this.traceModeActive = true;
         this.measureModeActive = false;
@@ -335,9 +451,21 @@ export default {
         this.traceModeActive = false;
         this.croppingStarted = false; // Prepare for cropping
         this.startPoint = null; // Reset cropping points
+      } else if (tool == "highlight") {
+        this.highlightModeActive = true;
+        this.croppingStarted = false;
+      } else if (tool == "underline") {
+        this.underlineModeActive = true;
+      } else if (tool == "comment") {
+        this.commentModeActive = true;
+        const { x, y } = this.getMousePosition(event);
+        this.currentCommentPosition = { x, y };
+        this.showCommentInput = true;
       } else {
         this.traceModeActive = false;
         this.measureModeActive = false;
+        this.highlightModeActive = false;
+        this.underlineModeActive = false;
       }
     },
 
@@ -345,38 +473,169 @@ export default {
       this.imageLoaded = true;
     },
     startTrace(event) {
-      if (!this.traceModeActive || !this.imageLoaded) return;
       const { x, y } = this.getMousePosition(event);
 
-      if (!this.croppingStarted) {
-        this.startPoint = { x, y };
-        this.currentSquare = { x, y, width: 0, height: 0 };
-        this.croppingStarted = true;
-      } else {
-        this.generateCroppedSvg();
-        this.croppingStarted = false;
-        this.traceModeActive = false;
+      if (this.highlightModeActive) {
+        if (!this.croppingStarted) {
+          console.log("Start highlighting here");
+          // Start drawing the highlight
+
+          this.startPoint = { x, y };
+          this.currentSquare = { x, y, width: 0, height: 0 };
+          this.croppingStarted = true; // First click, start cropping
+        } else {
+          this.annotations.push({
+            type: "highlight",
+            ...this.currentSquare,
+          });
+          this.croppingStarted = false;
+          this.highlightModeActive = false;
+          this.currentSquare = null;
+        }
+      } else if (this.underlineModeActive) {
+        if (!this.currentUnderline) {
+          console.log("Start underlining here");
+          const rect = this.$refs.image.getBoundingClientRect();
+          // Start drawing the underline
+          this.startPoint = { x, y };
+          this.currentUnderline = {
+            startX: x,
+            startY: y - rect.top, // Adjust relative to the image
+            endX: x,
+            endY: y - rect.top, // Same as startY initially
+          };
+        } else {
+          // Second click, save the underline and stop
+          this.annotations.push({
+            type: "underline",
+            ...this.currentUnderline,
+          });
+          this.currentUnderline = null;
+          this.underlineModeActive = false; // Stop after second click
+        }
+      } else if (this.traceModeActive) {
+        if (!this.croppingStarted) {
+          // Start drawing the trace
+          this.startPoint = { x, y };
+          this.currentSquare = { x, y, width: 0, height: 0 };
+          this.croppingStarted = true; // First click, start cropping
+        } else {
+          // Second click, stop the trace
+          this.generateCroppedSvg();
+          this.croppingStarted = false;
+          this.traceModeActive = false; // Stop after second click
+        }
       }
     },
     trace(event) {
-      if (!this.croppingStarted || !this.startPoint) return;
+      if (this.croppingStarted || this.startPoint) {
+        const { x, y } = this.getMousePosition(event);
+
+        this.currentSquare = {
+          x:
+            Math.min(x, this.startPoint.x) +
+            this.$refs.image.getBoundingClientRect().left,
+          y: Math.min(y, this.startPoint.y),
+          width: Math.abs(x - this.startPoint.x),
+          height: Math.abs(y - this.startPoint.y),
+        };
+      }
       const { x, y } = this.getMousePosition(event);
 
-      this.currentSquare = {
-        x:
-          Math.min(x, this.startPoint.x) +
-          this.$refs.image.getBoundingClientRect().left,
-        y: Math.min(y, this.startPoint.y),
-        width: Math.abs(x - this.startPoint.x),
-        height: Math.abs(y - this.startPoint.y),
-      };
+      // if (this.croppingStarted && this.highlightModeActive) {
+      //   console.log("Highlighting in progress");
+      //   this.currentSquare = {
+      //     x: Math.min(x, this.startPoint.x),
+      //     y: Math.min(y, this.startPoint.y),
+      //     width: Math.abs(x - this.startPoint.x),
+      //     height: Math.abs(y - this.startPoint.y),
+      //   };
+      // }
+      if (this.underlineModeActive && this.currentUnderline) {
+        console.log;
+        const rect = this.$refs.image.getBoundingClientRect();
+        this.currentUnderline.endX = x;
+        this.currentUnderline.endY = y - rect.top;
+      }
+    },
+
+    endTrace() {
+      if (this.highlightModeActive && this.croppingStarted) {
+        this.annotations.push({
+          type: "highlight",
+          ...this.currentSquare,
+        });
+        this.croppingStarted = false;
+        this.highlightModeActive = false;
+        this.currentSquare = null;
+      } else if (this.underlineModeActive && this.currentUnderline) {
+        this.annotations.push({
+          type: "underline",
+          ...this.currentUnderline,
+        });
+        this.currentUnderline = null;
+        this.underlineModeActive = false;
+      }
     },
     getMousePosition(event) {
       const imageElement = this.$refs.image;
+
+      // Check if the image element is available
+      if (!imageElement) {
+        console.error("Image element not available.");
+        return { x: 0, y: 0 }; // Return a fallback position
+      }
+
       const rect = imageElement.getBoundingClientRect();
       return { x: event.clientX - rect.left, y: event.clientY - rect.top };
     },
+
+    startComment(event) {
+      const { x, y } = this.getMousePosition(event);
+      this.currentCommentPosition = { x, y };
+      this.showCommentInput = true;
+    },
+
+    addComment() {
+      if (!this.currentCommentText) return;
+
+      this.comments.push({
+        text: this.currentCommentText,
+        x: this.currentCommentPosition.x,
+        y: this.currentCommentPosition.y,
+      });
+
+      this.currentCommentText = "";
+      this.currentCommentPosition = null;
+      this.showCommentInput = false;
+    },
+
+    cancelComment() {
+      this.currentCommentText = "";
+      this.currentCommentPosition = null;
+      this.showCommentInput = false;
+    },
+
+    removeComment(index) {
+      this.comments.splice(index, 1);
+    },
+
+    showComment(comment) {
+      this.tooltipContent = comment.text;
+      this.tooltipPosition = { x: comment.x + 20, y: comment.y + 20 };
+      this.tooltipVisible = true;
+    },
+
+    hideComment() {
+      this.tooltipVisible = false;
+      this.tooltipContent = "";
+    },
+
     generateCroppedSvg() {
+      if (!this.currentSquare) {
+        console.error("Cannot generate cropped SVG. currentSquare is null.");
+        return;
+      }
       const { x, y, width, height } = this.currentSquare;
       const imageElement = this.$refs.image;
       const naturalWidth = imageElement.naturalWidth;
@@ -692,6 +951,8 @@ export default {
   display: flex;
   justify-content: center;
   align-items: center;
+  overflow: hidden;
+  /* margin-left: 300px; */
 }
 
 .pdf-viewer img {
@@ -723,6 +984,13 @@ export default {
 .interactive-svg {
   cursor: crosshair;
   pointer-events: all;
+}
+
+.highlight-rectangle {
+  position: absolute;
+  border: 2px solid rgba(255, 255, 0, 0.7);
+  background-color: rgba(255, 255, 0, 0.3);
+  pointer-events: none;
 }
 
 .svg-popup {
