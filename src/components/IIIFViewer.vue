@@ -135,37 +135,54 @@
       </svg>
 
       <!-- Comments -->
+      <!-- Comments -->
       <div
         v-for="(comment, index) in comments"
         :key="'comment-' + index"
-        class="comment-box"
-        :style="{ top: comment.y + 'px', left: comment.x + 'px' }"
-        @mouseenter="showComment(comment)"
-        @mouseleave="hideComment"
-      >
-        💬
-      </div>
-
-      <!-- Comment Tooltip -->
-      <div
-        v-if="tooltipVisible"
-        class="comment-tooltip"
+        class="comment-container"
         :style="{
-          top: tooltipPosition.y + 'px',
-          left: tooltipPosition.x + 'px',
+          top: comment.y + 'px',
+          left: comment.x + 'px',
+          position: 'absolute',
         }"
+        @mousedown="startDraggingComment(index, $event)"
+        @mouseup="stopDraggingComment"
+        @mousemove="dragComment"
       >
-        {{ tooltipContent }}
+        <div class="comment-icon">💬</div>
+        <div class="comment-bubble">
+          <div class="comment-content">{{ comment.text }}</div>
+        </div>
+
+        <div
+          class="comment-icon"
+          @mouseenter="showComment(comment)"
+          @mouseleave="hideComment"
+        >
+          💬
+        </div>
+        <div
+          v-if="tooltipVisible && activeComment === comment"
+          class="comment-bubble"
+        >
+          <div class="comment-content">{{ comment.text }}</div>
+          <div class="comment-arrow"></div>
+        </div>
       </div>
 
       <!-- Comment Input -->
-      <div v-if="showCommentInput" class="comment-input">
+      <div v-if="showCommentInput" class="comment-input-container">
         <textarea
+          class="comment-input-box"
           v-model="currentCommentText"
           placeholder="Add your comment..."
         ></textarea>
-        <button @click="addComment">Add</button>
-        <button @click="cancelComment">Cancel</button>
+        <div class="comment-input-actions">
+          <button class="btn-save-comment" @click="addComment">Add</button>
+          <button class="btn-cancel-comment" @click="cancelComment">
+            Cancel
+          </button>
+        </div>
       </div>
 
       <!-- Cropping Rectangle -->
@@ -191,10 +208,10 @@
           <svg
             :width="popupDimensions.width"
             :height="popupDimensions.height"
-            @mousedown="startDrawing"
-            @mousemove="dynamicTrace"
-            @mouseup="endDrawing"
-            @mouseleave="endDrawing"
+            @mousedown="startAnnotating"
+            @mousemove="annotateImage"
+            @mouseup="endAnnotating"
+            @mouseleave="endAnnotating"
             xmlns="http://www.w3.org/2000/svg"
             class="interactive-svg"
           >
@@ -344,6 +361,9 @@ export default {
       currentCommentText: "",
       currentCommentPosition: null,
       comments: [],
+      draggingCommentIndex: null, // Index of the comment being dragged
+      dragOffset: { x: 0, y: 0 }, // Offset between the mouse and comment position
+      checkMode: false,
     };
   },
   computed: {
@@ -447,6 +467,7 @@ export default {
         this.traceModeActive = true;
         this.measureModeActive = false;
       } else if (tool === "measure") {
+        this.checkMode = true;
         this.measureModeActive = true;
         this.traceModeActive = false;
         this.croppingStarted = false; // Prepare for cropping
@@ -513,7 +534,7 @@ export default {
           this.currentUnderline = null;
           this.underlineModeActive = false; // Stop after second click
         }
-      } else if (this.traceModeActive) {
+      } else if (this.traceModeActive || this.measureModeActive) {
         if (!this.croppingStarted) {
           // Start drawing the trace
           this.startPoint = { x, y };
@@ -523,7 +544,8 @@ export default {
           // Second click, stop the trace
           this.generateCroppedSvg();
           this.croppingStarted = false;
-          this.traceModeActive = false; // Stop after second click
+          this.traceModeActive = false;
+          this.measureModeActive = false; // Stop after second click
         }
       }
     },
@@ -541,18 +563,7 @@ export default {
         };
       }
       const { x, y } = this.getMousePosition(event);
-
-      // if (this.croppingStarted && this.highlightModeActive) {
-      //   console.log("Highlighting in progress");
-      //   this.currentSquare = {
-      //     x: Math.min(x, this.startPoint.x),
-      //     y: Math.min(y, this.startPoint.y),
-      //     width: Math.abs(x - this.startPoint.x),
-      //     height: Math.abs(y - this.startPoint.y),
-      //   };
-      // }
       if (this.underlineModeActive && this.currentUnderline) {
-        console.log;
         const rect = this.$refs.image.getBoundingClientRect();
         this.currentUnderline.endX = x;
         this.currentUnderline.endY = y - rect.top;
@@ -602,11 +613,10 @@ export default {
       this.comments.push({
         text: this.currentCommentText,
         x: this.currentCommentPosition.x,
-        y: this.currentCommentPosition.y,
+        y: this.currentCommentPosition.y + 100,
       });
 
       this.currentCommentText = "";
-      this.currentCommentPosition = null;
       this.showCommentInput = false;
     },
 
@@ -629,6 +639,30 @@ export default {
     hideComment() {
       this.tooltipVisible = false;
       this.tooltipContent = "";
+    },
+
+    startDraggingComment(index, event) {
+      this.draggingCommentIndex = index;
+
+      // Calculate the offset between the mouse and comment position
+      const comment = this.comments[index];
+      this.dragOffset = {
+        x: event.clientX - comment.x,
+        y: event.clientY - comment.y,
+      };
+    },
+
+    dragComment(event) {
+      if (this.draggingCommentIndex !== null) {
+        const comment = this.comments[this.draggingCommentIndex];
+        comment.x = event.clientX - this.dragOffset.x;
+        comment.y = event.clientY - this.dragOffset.y;
+      }
+    },
+
+    // Stop dragging
+    stopDraggingComment() {
+      this.draggingCommentIndex = null;
     },
 
     generateCroppedSvg() {
@@ -662,6 +696,38 @@ export default {
       this.popupDimensions = { width: popupWidth, height: popupHeight };
       this.croppedImage = true;
     },
+
+    startAnnotating(event) {
+      if (this.checkMode) {
+        console.log("Checking1...");
+        this.startAngleMeasurement(event);
+      } else {
+        console.log("Drawing1...");
+        this.startDrawing(event);
+      }
+    },
+
+    annotateImage(event) {
+      if (this.checkMode) {
+        console.log("Checking2...");
+        this.moveAnglePoint(event);
+      } else {
+        console.log("Drawing2...");
+        this.dynamicTrace(event);
+      }
+    },
+
+    endAnnotating() {
+      if (this.checkMode) {
+        console.log("Checking3...");
+        this.stopAngleDragging();
+        this.checkMode = false;
+      } else {
+        console.log("Drawing3...");
+        this.endDrawing();
+      }
+    },
+
     startDrawing(event) {
       const { x, y } = this.getPopupMousePosition(event);
       this.currentStroke = {
@@ -1004,5 +1070,122 @@ export default {
   align-items: center;
   max-width: 66%;
   max-height: 66%;
+}
+
+.comment-container {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: grab;
+  z-index: 10;
+}
+.comment-container:active {
+  cursor: grabbing;
+}
+
+.comment-icon {
+  font-size: 24px;
+  cursor: pointer;
+  background-color: #ffecb3;
+  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.comment-bubble {
+  margin-left: 8px;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+  position: relative;
+}
+.comment-bubble::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -8px;
+  width: 0;
+  height: 0;
+  border: 8px solid transparent;
+  border-right-color: #fff;
+  transform: translateY(-50%);
+}
+
+.comment-arrow {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: 8px solid #fff;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.comment-content {
+  font-size: 14px;
+  color: #333;
+}
+
+/* Styles for the comment input box */
+.comment-input-container {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: #fff;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  padding: 10px;
+  width: 300px;
+  z-index: 1000;
+}
+
+.comment-input-box {
+  width: 100%;
+  height: 60px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  padding: 8px;
+  font-size: 14px;
+  margin-bottom: 8px;
+  resize: none;
+}
+
+.comment-input-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-save-comment,
+.btn-cancel-comment {
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  padding: 5px 10px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn-cancel-comment {
+  background-color: #6c757d;
+  margin-left: 10px;
+}
+
+.btn-save-comment:hover {
+  background-color: #0056b3;
+}
+
+.btn-cancel-comment:hover {
+  background-color: #5a6268;
 }
 </style>
