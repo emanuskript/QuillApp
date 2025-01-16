@@ -199,10 +199,7 @@
       ></div>
 
       <!-- Cropped Image Pop-up -->
-      <div
-        v-if="croppedImage && !measurePopupVisible"
-        class="blurred-background"
-      >
+      <div v-if="croppedImage" class="blurred-background">
         <div class="svg-popup">
           <h3>Interactive Cropped Image</h3>
           <svg
@@ -241,37 +238,8 @@
               stroke-width="2"
               fill="none"
             ></polyline>
-          </svg>
-          <div class="popup-buttons">
-            <button @click="saveCroppedImage">Save</button>
-            <button @click="discardCroppedImage">Discard</button>
-          </div>
-        </div>
-      </div>
 
-      <!-- Measurement Pop-up -->
-      <div v-if="measurePopupVisible" class="blurred-background">
-        <div class="svg-popup">
-          <h3>Interactive Angle Measurement</h3>
-          <svg
-            :width="popupDimensions.width"
-            :height="popupDimensions.height"
-            xmlns="http://www.w3.org/2000/svg"
-            class="interactive-svg"
-            @mousedown="startAngleMeasurement"
-            @mousemove="moveAnglePoint"
-            @mouseup="stopAngleDragging"
-            @mouseleave="stopAngleDragging"
-          >
-            <!-- Render cropped image -->
-            <foreignObject
-              :width="popupDimensions.width"
-              :height="popupDimensions.height"
-            >
-              <div v-html="croppedSvg"></div>
-            </foreignObject>
-
-            <!-- Render draggable points -->
+            <!-- Render draggable points for angle measurement -->
             <circle
               v-for="(point, index) in measurePoints"
               :key="'measure-point-' + index"
@@ -280,6 +248,7 @@
               r="8"
               fill="red"
               style="cursor: pointer"
+              @mousedown="startDraggingPoint(index, $event)"
             ></circle>
 
             <!-- Draw lines between points -->
@@ -305,16 +274,17 @@
             <!-- Angle Display -->
             <text
               v-if="measurePoints.length === 3"
-              :x="measurePoints[1].x + 10"
+              :x="measurePoints[1].x + 20"
               :y="measurePoints[1].y - 10"
               font-size="16"
-              fill="white"
+              fill="black"
             >
-              {{ calculatedAngle.toFixed(2) }}°
+              {{ calculatedAngle }}°
             </text>
           </svg>
           <div class="popup-buttons">
-            <button @click="closeMeasurePopup">Close</button>
+            <button @click="saveCroppedImage">Save</button>
+            <button @click="discardCroppedImage">Discard</button>
           </div>
         </div>
       </div>
@@ -363,7 +333,6 @@ export default {
       comments: [],
       draggingCommentIndex: null, // Index of the comment being dragged
       dragOffset: { x: 0, y: 0 }, // Offset between the mouse and comment position
-      checkMode: false,
     };
   },
   computed: {
@@ -380,7 +349,6 @@ export default {
     currentImage() {
       return this.images[this.currentPage] || null;
     },
-
     totalPages() {
       return this.images.length;
     },
@@ -404,6 +372,7 @@ export default {
       this.images = [this.source];
     }
   },
+
   methods: {
     async fetchIIIFImages(manifestUrl) {
       try {
@@ -424,10 +393,21 @@ export default {
         alert("Error fetching IIIF manifest: " + error.message);
       }
     },
+
+    getPopupMousePosition(event) {
+      const svgElement = event.target.closest("svg");
+      if (!svgElement) {
+        console.error("SVG element not found.");
+        return { x: 0, y: 0 };
+      }
+      const rect = svgElement.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      return { x, y };
+    },
     formatPoints(points) {
       return points.map(({ x, y }) => `${x},${y}`).join(" ");
     },
-
     calculateAngle(pt1, pt2, pt3) {
       const v1 = { x: pt1.x - pt2.x, y: pt1.y - pt2.y };
       const v2 = { x: pt3.x - pt2.x, y: pt3.y - pt2.y };
@@ -442,10 +422,100 @@ export default {
       return angleDeg.toFixed(2); // Return as fixed decimal
     },
 
+    async generateCroppedSvg() {
+      if (!this.currentSquare) {
+        console.error("Cannot generate cropped SVG. currentSquare is null.");
+        return;
+      }
+
+      const { x, y, width, height } = this.currentSquare;
+      const imageElement = this.$refs.image;
+      const naturalWidth = imageElement.naturalWidth;
+      const naturalHeight = imageElement.naturalHeight;
+      const rect = imageElement.getBoundingClientRect();
+      const scaleX = naturalWidth / rect.width;
+      const scaleY = naturalHeight / rect.height;
+
+      const scaledX = (x - rect.left) * scaleX;
+      const scaledY = y * scaleY;
+      const scaledWidth = width * scaleX;
+      const scaledHeight = height * scaleY;
+
+      const popupWidth = (window.innerWidth * 2) / 3;
+      const popupHeight = (scaledHeight / scaledWidth) * popupWidth;
+
+      // Save the cropped SVG
+      this.croppedSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${scaledWidth} ${scaledHeight}" width="${popupWidth}" height="${popupHeight}">
+      <image href="${
+        this.currentImage
+      }" x="${-scaledX}" y="${-scaledY}" width="${naturalWidth}" height="${naturalHeight}" />
+    </svg>
+  `;
+
+      // Set popup dimensions
+      this.popupDimensions = { width: popupWidth, height: popupHeight };
+
+      // Reset cropping state
+      this.croppingStarted = false;
+      this.currentSquare = null;
+      this.startPoint = null;
+
+      // Generate and display the cropped PNG
+      await this.generateCroppedPng();
+    },
+
+    async generateCroppedPng() {
+      if (!this.croppedSvg) {
+        console.error("Cannot generate cropped PNG: No SVG available.");
+        return;
+      }
+
+      // Create an image element from the SVG
+      const svgBlob = new Blob([this.croppedSvg], { type: "image/svg+xml" });
+      const svgUrl = URL.createObjectURL(svgBlob);
+
+      const img = new Image();
+      img.src = svgUrl;
+
+      await new Promise((resolve, reject) => {
+        img.onload = () => {
+          // Create a canvas to render the PNG
+          const canvas = document.createElement("canvas");
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext("2d");
+
+          // Draw the SVG onto the canvas
+          ctx.drawImage(img, 0, 0);
+
+          // Convert the canvas to a PNG data URL
+          const pngUrl = canvas.toDataURL("image/png");
+
+          // Display the PNG in the popup
+          this.croppedImage = pngUrl;
+
+          // Clean up
+          URL.revokeObjectURL(svgUrl);
+          resolve();
+        };
+
+        img.onerror = (error) => {
+          console.error("Error loading SVG:", error);
+          reject(error);
+        };
+      });
+    },
     discardCroppedImage() {
       this.croppedImage = null;
       this.croppedSvg = null;
       this.strokes = [];
+      this.measurePoints = [];
+      this.calculatedAngle = 0;
+      // Reset cropping state
+      this.croppingStarted = false;
+      this.currentSquare = null;
+      this.startPoint = null;
     },
     nextPage() {
       if (this.currentPage < this.totalPages - 1) {
@@ -455,6 +525,7 @@ export default {
     },
     prevPage() {
       if (this.currentPage > 0) this.currentPage--;
+      this.clearAnnotations();
     },
     goToPage() {
       const newPage =
@@ -462,20 +533,21 @@ export default {
       this.currentPage = newPage;
     },
     selectTool(tool) {
+      if (!this.currentImage) {
+        return;
+      }
       this.currentTool = tool;
       if (tool === "trace") {
         this.traceModeActive = true;
         this.measureModeActive = false;
+        this.croppedImage = false; // Reset croppedImage when Trace is selected
       } else if (tool === "measure") {
-        this.checkMode = true;
         this.measureModeActive = true;
         this.traceModeActive = false;
-        this.croppingStarted = false; // Prepare for cropping
-        this.startPoint = null; // Reset cropping points
-      } else if (tool == "highlight") {
+        this.croppedImage = false; // Reset croppedImage when Measure is selected
+      } else if (tool === "highlight") {
         this.highlightModeActive = true;
-        this.croppingStarted = false;
-      } else if (tool == "underline") {
+      } else if (tool === "underline") {
         this.underlineModeActive = true;
       } else if (tool == "comment") {
         this.commentModeActive = true;
@@ -489,22 +561,23 @@ export default {
         this.underlineModeActive = false;
       }
     },
-
     handleImageLoad() {
       this.imageLoaded = true;
     },
     startTrace(event) {
+      if (this.croppedImage == null && !this.highlightModeActive) {
+        return; // Exit the function early
+      }
       const { x, y } = this.getMousePosition(event);
 
       if (this.highlightModeActive) {
-        if (!this.croppingStarted) {
-          console.log("Start highlighting here");
-          // Start drawing the highlight
-
+        if (!this.croppingStarted && event.button === 0) {
+          // Start cropping
           this.startPoint = { x, y };
           this.currentSquare = { x, y, width: 0, height: 0 };
-          this.croppingStarted = true; // First click, start cropping
+          this.croppingStarted = true;
         } else {
+          // Finish cropping and add the highlight annotation
           this.annotations.push({
             type: "highlight",
             ...this.currentSquare,
@@ -515,41 +588,42 @@ export default {
         }
       } else if (this.underlineModeActive) {
         if (!this.currentUnderline) {
-          console.log("Start underlining here");
+          // Start underlining
           const rect = this.$refs.image.getBoundingClientRect();
-          // Start drawing the underline
           this.startPoint = { x, y };
           this.currentUnderline = {
             startX: x,
-            startY: y - rect.top, // Adjust relative to the image
+            startY: y - rect.top,
             endX: x,
-            endY: y - rect.top, // Same as startY initially
+            endY: y - rect.top,
           };
         } else {
-          // Second click, save the underline and stop
+          // Finish underlining and add the underline annotation
           this.annotations.push({
             type: "underline",
             ...this.currentUnderline,
           });
           this.currentUnderline = null;
-          this.underlineModeActive = false; // Stop after second click
+          this.underlineModeActive = false;
         }
       } else if (this.traceModeActive || this.measureModeActive) {
-        if (!this.croppingStarted) {
-          // Start drawing the trace
+        if (!this.croppingStarted && !this.croppedImage) {
           this.startPoint = { x, y };
           this.currentSquare = { x, y, width: 0, height: 0 };
-          this.croppingStarted = true; // First click, start cropping
-        } else {
-          // Second click, stop the trace
+          this.croppingStarted = true;
+        } else if (this.croppingStarted && !this.croppedImage) {
           this.generateCroppedSvg();
           this.croppingStarted = false;
-          this.traceModeActive = false;
-          this.measureModeActive = false; // Stop after second click
+          this.currentSquare = null;
+          this.startPoint = null;
         }
       }
     },
     trace(event) {
+      if (this.croppedImage == null && !this.highlightModeActive) {
+        return; // Exit the function early
+      }
+
       if (this.croppingStarted || this.startPoint) {
         const { x, y } = this.getMousePosition(event);
 
@@ -561,15 +635,14 @@ export default {
           width: Math.abs(x - this.startPoint.x),
           height: Math.abs(y - this.startPoint.y),
         };
-      }
-      const { x, y } = this.getMousePosition(event);
-      if (this.underlineModeActive && this.currentUnderline) {
+      } else if (this.underlineModeActive && this.currentUnderline) {
+        // Update the end position of the underline
         const rect = this.$refs.image.getBoundingClientRect();
+        const { x, y } = this.getMousePosition(event);
         this.currentUnderline.endX = x;
         this.currentUnderline.endY = y - rect.top;
       }
     },
-
     endTrace() {
       if (this.highlightModeActive && this.croppingStarted) {
         this.annotations.push({
@@ -587,18 +660,6 @@ export default {
         this.currentUnderline = null;
         this.underlineModeActive = false;
       }
-    },
-    getMousePosition(event) {
-      const imageElement = this.$refs.image;
-
-      // Check if the image element is available
-      if (!imageElement) {
-        console.error("Image element not available.");
-        return { x: 0, y: 0 }; // Return a fallback position
-      }
-
-      const rect = imageElement.getBoundingClientRect();
-      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
     },
 
     startComment(event) {
@@ -665,79 +726,46 @@ export default {
       this.draggingCommentIndex = null;
     },
 
-    generateCroppedSvg() {
-      if (!this.currentSquare) {
-        console.error("Cannot generate cropped SVG. currentSquare is null.");
-        return;
-      }
-      const { x, y, width, height } = this.currentSquare;
+    getMousePosition(event) {
       const imageElement = this.$refs.image;
-      const naturalWidth = imageElement.naturalWidth;
-      const naturalHeight = imageElement.naturalHeight;
+      if (!imageElement) {
+        console.error("Image element not available.");
+        return { x: 0, y: 0 };
+      }
       const rect = imageElement.getBoundingClientRect();
-      const scaleX = naturalWidth / rect.width;
-      const scaleY = naturalHeight / rect.height;
-
-      const scaledX = (x - rect.left) * scaleX;
-      const scaledY = y * scaleY;
-      const scaledWidth = width * scaleX;
-      const scaledHeight = height * scaleY;
-
-      const popupWidth = (window.innerWidth * 2) / 3;
-      const popupHeight = (scaledHeight / scaledWidth) * popupWidth;
-
-      this.croppedSvg = `
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${scaledWidth} ${scaledHeight}" width="${popupWidth}" height="${popupHeight}">
-        <image href="${
-          this.currentImage
-        }" x="${-scaledX}" y="${-scaledY}" width="${naturalWidth}" height="${naturalHeight}" />
-      </svg>
-      `;
-      this.popupDimensions = { width: popupWidth, height: popupHeight };
-      this.croppedImage = true;
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
     },
 
     startAnnotating(event) {
-      if (this.checkMode) {
-        console.log("Checking1...");
+      if (this.measureModeActive) {
         this.startAngleMeasurement(event);
-      } else {
-        console.log("Drawing1...");
+      } else if (this.traceModeActive) {
         this.startDrawing(event);
       }
     },
-
     annotateImage(event) {
-      if (this.checkMode) {
-        console.log("Checking2...");
+      if (this.measureModeActive) {
         this.moveAnglePoint(event);
-      } else {
-        console.log("Drawing2...");
+      } else if (this.traceModeActive) {
         this.dynamicTrace(event);
       }
     },
-
     endAnnotating() {
-      if (this.checkMode) {
-        console.log("Checking3...");
+      if (this.measureModeActive) {
         this.stopAngleDragging();
-        this.checkMode = false;
-      } else {
-        console.log("Drawing3...");
+      } else if (this.traceModeActive) {
         this.endDrawing();
       }
     },
-
     startDrawing(event) {
       const { x, y } = this.getPopupMousePosition(event);
       this.currentStroke = {
         points: [{ x, y }],
         color: this.generateRandomColor(),
       };
-      this.dynamicTracePath = `M${x},${y}`; // Initialize dynamic path
+      this.dynamicTracePath = `M${x},${y}`;
     },
     generateRandomColor() {
-      // Define color-blind friendly palette (high contrast and accessible colors)
       const colorBlindFriendlyPalette = [
         "#E69F00", // Orange
         "#56B4E9", // Sky Blue
@@ -748,80 +776,59 @@ export default {
         "#CC79A7", // Reddish Purple
       ];
 
-      // Track the last generated color
       if (!this.lastColor) {
-        this.lastColor = null; // Initialize lastColor on first call
+        this.lastColor = null;
       }
 
-      // Filter out the last color to avoid repetition
       const availableColors = colorBlindFriendlyPalette.filter(
         (color) => color !== this.lastColor
       );
 
-      // Randomly pick a color from the filtered list
       const randomIndex = Math.floor(Math.random() * availableColors.length);
       const selectedColor = availableColors[randomIndex];
 
-      // Update lastColor and return the selected color
       this.lastColor = selectedColor;
       return selectedColor;
     },
-
-    draw(event) {
+    dynamicTrace(event) {
       if (!this.currentStroke) return;
       const { x, y } = this.getPopupMousePosition(event);
       this.currentStroke.points.push({ x, y });
-      this.dynamicTracePath += ` L${x},${y}`; // Update dynamic path
-    },
-    dynamicTrace(event) {
-      if (!this.currentStroke) return; // Ensure a stroke is in progress
-      const { x, y } = this.getPopupMousePosition(event);
-
-      // Add the current point to the stroke
-      this.currentStroke.points.push({ x, y });
-
-      // Dynamically format the points to update the path
       this.dynamicTracePath = this.formatPoints(this.currentStroke.points);
     },
     endDrawing() {
       if (this.currentStroke) {
         this.strokes.push(this.currentStroke);
         this.currentStroke = null;
-        this.dynamicTracePath = ""; // Reset dynamic path
+        this.dynamicTracePath = "";
       }
     },
-
     startAngleMeasurement(event) {
-      if (this.measurePopupVisible) {
-        const { x, y } = this.getPopupMousePosition(event);
+      const { x, y } = this.getPopupMousePosition(event);
 
-        // Prevent adding duplicate points
-        if (this.measurePoints.some((p) => Math.hypot(p.x - x, p.y - y) < 10)) {
-          alert("Point too close to an existing one.");
-          return;
+      // Check if we're dragging an existing point
+      const nearestPointIndex = this.findNearestPoint(x, y, 10); // 10px threshold
+      if (nearestPointIndex !== -1) {
+        this.draggingPoint = nearestPointIndex;
+        return; // Exit early if dragging an existing point
+      }
+
+      // Add a new point if we're not dragging
+      if (this.measurePoints.length < 3) {
+        this.measurePoints.push({ x, y });
+
+        // Calculate the angle if we have 3 points
+        if (this.measurePoints.length === 3) {
+          this.calculatedAngle = this.calculateAngle(
+            this.measurePoints[0],
+            this.measurePoints[1],
+            this.measurePoints[2]
+          );
         }
-
-        if (this.measurePoints.length < 3) {
-          this.measurePoints.push({ x, y });
-
-          if (this.measurePoints.length === 3) {
-            this.calculatedAngle = this.calculateAngle(
-              this.measurePoints[0],
-              this.measurePoints[1],
-              this.measurePoints[2]
-            );
-          }
-        } else {
-          alert("Three points already selected. Drag to adjust.");
-        }
+      } else {
+        alert("Three points already selected. Drag to adjust.");
       }
     },
-
-    startDraggingAnglePoint(event) {
-      const { x, y } = this.getPopupMousePosition(event);
-      this.draggingPoint = this.findNearestPoint(x, y);
-    },
-
     moveAnglePoint(event) {
       if (this.draggingPoint !== -1) {
         const { x, y } = this.getPopupMousePosition(event);
@@ -836,7 +843,6 @@ export default {
         }
       }
     },
-
     stopAngleDragging() {
       if (this.draggingPoint !== -1) {
         this.draggingPoint = -1;
@@ -850,105 +856,134 @@ export default {
         }
       }
     },
-
     findNearestPoint(x, y, threshold = 10) {
       return this.measurePoints.findIndex(
         (point) =>
           Math.abs(point.x - x) < threshold && Math.abs(point.y - y) < threshold
       );
     },
-    saveCroppedImage() {
-      const { x, y, width, height } = this.currentSquare;
-      const imageElement = this.$refs.image; // Reference to the image element
-      const naturalWidth = imageElement.naturalWidth;
-      const naturalHeight = imageElement.naturalHeight;
-      const rect = imageElement.getBoundingClientRect();
-      const scaleX = naturalWidth / rect.width;
-      const scaleY = naturalHeight / rect.height;
 
-      const scaledX = x * scaleX;
-      const scaledY = y * scaleY;
-      const scaledWidth = width * scaleX;
-      const scaledHeight = height * scaleY;
+    async saveCroppedImage() {
+      if (!this.croppedSvg) {
+        console.error("Cannot save: No SVG available.");
+        return;
+      }
+      // Save the SVG alone
+      const svgBlob = new Blob([this.croppedSvg], { type: "image/svg+xml" });
+      const svgUrl = URL.createObjectURL(svgBlob);
+      const svgLink = document.createElement("a");
+      svgLink.href = svgUrl;
+      svgLink.download = "cropped-image.svg";
+      svgLink.click();
+      URL.revokeObjectURL(svgUrl);
 
+      // Create a canvas to combine the cropped image and annotations
       const canvas = document.createElement("canvas");
-      canvas.width = scaledWidth;
-      canvas.height = scaledHeight;
+      const { width, height } = this.popupDimensions;
+      canvas.width = width;
+      canvas.height = height;
       const ctx = canvas.getContext("2d");
 
+      // Load the cropped image from the SVG
       const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.src = this.currentImage;
+      img.src = this.croppedImage; // Ensure this.croppedImage contains the correct image data (e.g., a data URL or a valid image URL)
 
-      img.onload = () => {
-        try {
-          ctx.drawImage(
-            img,
-            scaledX,
-            scaledY,
-            scaledWidth,
-            scaledHeight,
-            0,
-            0,
-            scaledWidth,
-            scaledHeight
-          );
+      try {
+        await new Promise((resolve, reject) => {
+          img.onload = () => {
+            // Clear the canvas before drawing
+            ctx.clearRect(0, 0, width, height);
 
-          this.strokes.forEach((stroke) => {
-            ctx.strokeStyle = stroke.color;
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            stroke.points.forEach((point, index) => {
-              const transformedX =
-                (point.x - scaledX) * (canvas.width / scaledWidth);
-              const transformedY =
-                (point.y - scaledY) * (canvas.height / scaledHeight);
+            // Draw the cropped image onto the canvas
+            ctx.drawImage(img, 0, 0, width, height);
 
-              if (index === 0) {
-                ctx.moveTo(transformedX, transformedY);
-              } else {
-                ctx.lineTo(transformedX, transformedY);
-              }
+            // Draw the annotations (traces and angle measurements)
+            this.strokes.forEach((stroke) => {
+              ctx.strokeStyle = stroke.color;
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              stroke.points.forEach((point, index) => {
+                if (index === 0) {
+                  ctx.moveTo(point.x, point.y);
+                } else {
+                  ctx.lineTo(point.x, point.y);
+                }
+              });
+              ctx.stroke();
             });
-            ctx.stroke();
-          });
 
-          canvas.toBlob((blob) => {
-            const imageUrl = URL.createObjectURL(blob);
-            const link = document.createElement("a");
-            link.href = imageUrl;
-            link.download = "cropped-image-with-drawings.png";
-            link.click();
-            URL.revokeObjectURL(imageUrl);
-          });
-        } catch (error) {
-          console.error("Error saving image with drawings:", error);
-        }
-      };
+            // Draw angle measurements
+            this.measurePoints.forEach((point) => {
+              ctx.fillStyle = "red";
+              ctx.beginPath();
+              ctx.arc(point.x, point.y, 5, 0, 2 * Math.PI);
+              ctx.fill();
+            });
 
-      img.onerror = (error) => {
-        console.error("Error loading the image:", error);
-      };
-    },
+            if (this.measurePoints.length >= 2) {
+              const p1 = this.measurePoints[0];
+              const p2 = this.measurePoints[1];
+              ctx.strokeStyle = "blue";
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(p1.x, p1.y);
+              ctx.lineTo(p2.x, p2.y);
+              ctx.stroke();
+            }
 
-    getPopupMousePosition(event) {
-      const svgElement = event.target.closest("svg");
-      if (!svgElement) {
-        console.error("SVG element not found.");
-        return { x: 0, y: 0 };
+            if (this.measurePoints.length === 3) {
+              const p2 = this.measurePoints[1];
+              const p3 = this.measurePoints[2];
+              ctx.strokeStyle = "blue";
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(p2.x, p2.y);
+              ctx.lineTo(p3.x, p3.y);
+              ctx.stroke();
+
+              // Display the angle
+              ctx.fillStyle = "black";
+              ctx.font = "12px Arial";
+              ctx.fillText(`${this.calculatedAngle}°`, p2.x + 10, p2.y - 10);
+            }
+
+            // Convert the canvas to a PNG and trigger download
+            canvas.toBlob((blob) => {
+              if (!blob) {
+                reject(new Error("Canvas toBlob failed"));
+                return;
+              }
+              const pngUrl = URL.createObjectURL(blob);
+              const pngLink = document.createElement("a");
+              pngLink.href = pngUrl;
+              pngLink.download = "cropped-image-with-annotations.png";
+              pngLink.click();
+              URL.revokeObjectURL(pngUrl);
+              resolve();
+            }, "image/png");
+          };
+
+          img.onerror = (error) => {
+            console.error("Error loading cropped image:", error);
+            reject(error);
+          };
+        });
+      } catch (error) {
+        console.error("Error in saveCroppedImage:", error);
       }
-      const rect = svgElement.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
-      return { x, y };
+    },
+    startDraggingPoint(index, event) {
+      event.preventDefault();
+      this.draggingPoint = index;
     },
     clearAnnotations() {
+      this.annotations = [];
+      this.comments = [];
       this.strokes = [];
     },
   },
 };
 </script>
-
 
 <style scoped>
 .viewer-container {
@@ -1025,6 +1060,14 @@ export default {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+.underline-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none; /* Ensure it doesn't block mouse events */
 }
 
 .cropping-rectangle {
