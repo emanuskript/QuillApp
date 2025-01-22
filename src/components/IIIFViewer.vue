@@ -94,20 +94,6 @@
         }"
       ></div>
 
-      <!-- Render existing underlines -->
-      <svg class="underline-svg" style="position: absolute">
-        <line
-          v-for="(annotation, index) in underlineAnnotations"
-          :key="'underline-' + index"
-          :x1="annotation.startX"
-          :y1="annotation.startY"
-          :x2="annotation.endX"
-          :y2="annotation.endY"
-          stroke="blue"
-          stroke-width="2"
-        ></line>
-      </svg>
-
       <!-- Render dynamic highlight rectangle -->
       <div
         v-if="highlightModeActive && currentSquare"
@@ -121,18 +107,34 @@
         }"
       ></div>
 
+      <div
+        v-for="(annotation, index) in underlineAnnotations"
+        :key="'underline-' + index"
+        class="underline-line"
+        :style="{
+          position: 'absolute',
+          left: `${annotation.x}px`,
+          top: `${annotation.y}px`,
+          width: `${annotation.width}px`,
+          height: '2px',
+          backgroundColor: 'red',
+        }"
+      ></div>
+
       <!-- Render dynamic underline -->
-      <svg class="underline-svg" style="position: absolute">
-        <line
-          v-if="underlineModeActive && currentUnderline"
-          :x1="currentUnderline.startX"
-          :y1="currentUnderline.startY"
-          :x2="currentUnderline.endX"
-          :y2="currentUnderline.endY"
-          stroke="blue"
-          stroke-width="2"
-        ></line>
-      </svg>
+      <!-- Render dynamic underline -->
+      <div
+        v-if="currentImage && underlineModeActive && currentUnderline"
+        class="underline-line"
+        :style="{
+          position: 'absolute',
+          left: `${currentUnderline.x}px`,
+          top: `${currentUnderline.y}px`,
+          width: `${currentUnderline.width}px`,
+          height: '2px', // Height of the underline
+          backgroundColor: 'blue', // Color of the underline
+        }"
+      ></div>
 
       <!-- Comments -->
       <!-- Comments -->
@@ -549,6 +551,7 @@ export default {
         this.highlightModeActive = true;
       } else if (tool === "underline") {
         this.underlineModeActive = true;
+        console.log("Underline mode activated");
       } else if (tool == "comment") {
         this.commentModeActive = true;
         const { x, y } = this.getMousePosition(event);
@@ -565,7 +568,13 @@ export default {
       this.imageLoaded = true;
     },
     startTrace(event) {
-      if (this.croppedImage == null && !this.highlightModeActive) {
+      if (
+        this.croppedImage == null &&
+        !this.highlightModeActive &&
+        !this.underlineModeActive &&
+        !this.traceModeActive &&
+        this.measureModeActive
+      ) {
         return; // Exit the function early
       }
       const { x, y } = this.getMousePosition(event);
@@ -587,24 +596,31 @@ export default {
           this.currentSquare = null;
         }
       } else if (this.underlineModeActive) {
-        if (!this.currentUnderline) {
-          // Start underlining
-          const rect = this.$refs.image.getBoundingClientRect();
+        if (!this.croppingStarted && event.button === 0) {
+          console.log("Underline mode started");
+          // Start underlining (underline mode)
+          const { x, y } = this.getMousePosition(event);
+          //const rect = this.$refs.image.getBoundingClientRect();
           this.startPoint = { x, y };
           this.currentUnderline = {
-            startX: x,
-            startY: y - rect.top,
-            endX: x,
-            endY: y - rect.top,
-          };
-        } else {
-          // Finish underlining and add the underline annotation
-          this.annotations.push({
             type: "underline",
-            ...this.currentUnderline,
-          });
-          this.currentUnderline = null;
+            x: x + 650,
+            y: y,
+            width: 0,
+            height: 2,
+            startX: 0, // Relative to the SVG container
+            startY: 0, // Relative to the SVG container
+            endX: 0, // Relative to the SVG container
+            endY: 0, // Relative to the SVG container
+          };
+          console.log(this.currentUnderline);
+          this.croppingStarted = true;
+        } else {
+          console.log(this.currentUnderline);
+          this.annotations.push(this.currentUnderline);
+          this.croppingStarted = false;
           this.underlineModeActive = false;
+          this.currentUnderline = null;
         }
       } else if (this.traceModeActive || this.measureModeActive) {
         if (!this.croppingStarted && !this.croppedImage) {
@@ -620,9 +636,14 @@ export default {
       }
     },
     trace(event) {
-      if (this.croppedImage == null && !this.highlightModeActive) {
+      if (
+        this.croppedImage == null &&
+        !this.highlightModeActive &&
+        !this.underlineModeActive
+      ) {
         return; // Exit the function early
       }
+      const { x, y } = this.getMousePosition(event);
 
       if (this.croppingStarted || this.startPoint) {
         const { x, y } = this.getMousePosition(event);
@@ -636,11 +657,11 @@ export default {
           height: Math.abs(y - this.startPoint.y),
         };
       } else if (this.underlineModeActive && this.currentUnderline) {
-        // Update the end position of the underline
-        const rect = this.$refs.image.getBoundingClientRect();
-        const { x, y } = this.getMousePosition(event);
-        this.currentUnderline.endX = x;
-        this.currentUnderline.endY = y - rect.top;
+        console.log("Underline mode herererer");
+        console.log(this.currentUnderline);
+        this.currentUnderline.width = Math.abs(x - this.startPoint.x);
+        this.currentUnderline.endX = x - this.currentUnderline.x; // Relative to the SVG container
+        this.currentUnderline.endY = y - this.currentUnderline.y; // Relative to the SVG container
       }
     },
     endTrace() {
@@ -652,13 +673,13 @@ export default {
         this.croppingStarted = false;
         this.highlightModeActive = false;
         this.currentSquare = null;
-      } else if (this.underlineModeActive && this.currentUnderline) {
-        this.annotations.push({
-          type: "underline",
-          ...this.currentUnderline,
-        });
-        this.currentUnderline = null;
+      } else if (this.underlineModeActive && this.currentUnderline != null) {
+        console.log(this.currentUnderline);
+
+        this.annotations.push(this.currentUnderline);
+        this.croppingStarted = false;
         this.underlineModeActive = false;
+        this.currentUnderline = null;
       }
     },
 
@@ -1061,13 +1082,12 @@ export default {
   max-height: 100%;
   object-fit: contain;
 }
-.underline-svg {
+.underline-line {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  background-color: blue; /* Color of the underline */
+  height: 2px; /* Height of the underline */
   pointer-events: none; /* Ensure it doesn't block mouse events */
+  z-index: 100; /* Ensure it appears above other elements */
 }
 
 .cropping-rectangle {
