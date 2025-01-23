@@ -639,13 +639,20 @@ export default {
       if (
         this.croppedImage == null &&
         !this.highlightModeActive &&
-        !this.underlineModeActive
+        !this.underlineModeActive &&
+        !this.traceModeActive &&
+        this.measureModeActive
       ) {
         return; // Exit the function early
       }
       const { x, y } = this.getMousePosition(event);
 
-      if (this.croppingStarted || this.startPoint) {
+      if (
+        this.croppingStarted &&
+        (this.highlightModeActive ||
+          this.traceModeActive ||
+          this.measureModeActive)
+      ) {
         const { x, y } = this.getMousePosition(event);
 
         this.currentSquare = {
