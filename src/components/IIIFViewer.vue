@@ -1094,7 +1094,7 @@ export default {
   background-color: blue; /* Color of the underline */
   height: 2px; /* Height of the underline */
   pointer-events: none; /* Ensure it doesn't block mouse events */
-  z-index: 100; /* Ensure it appears above other elements */
+  z-index: 1; /* Ensure it appears above other elements */
 }
 
 .cropping-rectangle {
@@ -1106,7 +1106,7 @@ export default {
 }
 
 .blurred-background {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   width: 100%;
@@ -1115,6 +1115,7 @@ export default {
   justify-content: center;
   align-items: center;
   backdrop-filter: blur(8px);
+  z-index: 1001; /* High z-index to overlay everything */
 }
 
 .interactive-svg {
@@ -1140,6 +1141,7 @@ export default {
   align-items: center;
   max-width: 66%;
   max-height: 66%;
+  z-index: 1002;
 }
 
 .comment-container {
@@ -1148,7 +1150,7 @@ export default {
   flex-direction: column;
   align-items: center;
   cursor: grab;
-  z-index: 10;
+  z-index: 1;
 }
 .comment-container:active {
   cursor: grabbing;
