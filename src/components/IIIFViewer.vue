@@ -615,6 +615,8 @@ export default {
           };
           console.log(this.currentUnderline);
           this.croppingStarted = true;
+          this.traceModeActive = false;
+          this.measureModeActive = false;
         } else {
           console.log(this.currentUnderline);
           this.annotations.push(this.currentUnderline);
