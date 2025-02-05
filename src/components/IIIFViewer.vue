@@ -263,6 +263,22 @@
               stroke="blue"
               stroke-width="2"
             ></line>
+            <text
+              v-if="measurePoints.length >= 2"
+              :x="(measurePoints[0].x + measurePoints[1].x) / 2"
+              :y="(measurePoints[0].y + measurePoints[1].y) / 2 - 10"
+              font-size="12"
+              fill="black"
+            >
+              {{
+                calculateRelativeLength(
+                  measurePoints[0],
+                  measurePoints[1]
+                ).toFixed(2)
+              }}
+              px
+            </text>
+
             <line
               v-if="measurePoints.length === 3"
               :x1="measurePoints[1].x"
@@ -272,6 +288,21 @@
               stroke="blue"
               stroke-width="2"
             ></line>
+            <text
+              v-if="measurePoints.length === 3"
+              :x="(measurePoints[1].x + measurePoints[2].x) / 2"
+              :y="(measurePoints[1].y + measurePoints[2].y) / 2 - 10"
+              font-size="12"
+              fill="black"
+            >
+              {{
+                calculateRelativeLength(
+                  measurePoints[1],
+                  measurePoints[2]
+                ).toFixed(2)
+              }}
+              px
+            </text>
 
             <!-- Angle Display -->
             <text
@@ -335,6 +366,7 @@ export default {
       comments: [],
       draggingCommentIndex: null, // Index of the comment being dragged
       dragOffset: { x: 0, y: 0 }, // Offset between the mouse and comment position
+      scalingFactor: 1,
     };
   },
   computed: {
@@ -422,6 +454,12 @@ export default {
       let angleDeg = (angleRad * 180) / Math.PI;
 
       return angleDeg.toFixed(2); // Return as fixed decimal
+    },
+    calculateRelativeLength(p1, p2) {
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const realLength = Math.sqrt(dx * dx + dy * dy); // Real pixel length
+      return realLength * this.scalingFactor; // Relative length
     },
 
     async generateCroppedSvg() {
@@ -565,8 +603,15 @@ export default {
       }
     },
     handleImageLoad() {
+      const imageElement = this.$refs.image;
+      if (imageElement) {
+        const displayedWidth = imageElement.width;
+        const naturalWidth = imageElement.naturalWidth;
+        this.scalingFactor = displayedWidth / naturalWidth;
+      }
       this.imageLoaded = true;
     },
+
     startTrace(event) {
       if (
         this.croppedImage == null &&
