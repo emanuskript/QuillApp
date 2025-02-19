@@ -82,7 +82,7 @@
 
       <!-- Render existing highlights -->
       <div
-        v-for="(annotation, index) in highlightAnnotations"
+        v-for="(annotation, index) in currentPageHighlights"
         :key="'highlight-' + index"
         class="highlight-rectangle"
         :style="{
@@ -107,8 +107,9 @@
         }"
       ></div>
 
+      <!-- Render existing underlines -->
       <div
-        v-for="(annotation, index) in underlineAnnotations"
+        v-for="(annotation, index) in currentPageUnderlines"
         :key="'underline-' + index"
         class="underline-line"
         :style="{
@@ -122,7 +123,6 @@
       ></div>
 
       <!-- Render dynamic underline -->
-      <!-- Render dynamic underline -->
       <div
         v-if="currentImage && underlineModeActive && currentUnderline"
         class="underline-line"
@@ -131,15 +131,14 @@
           left: `${currentUnderline.x}px`,
           top: `${currentUnderline.y}px`,
           width: `${currentUnderline.width}px`,
-          height: '2px', // Height of the underline
-          backgroundColor: 'blue', // Color of the underline
+          height: '2px',
+          backgroundColor: 'blue',
         }"
       ></div>
 
-      <!-- Comments -->
-      <!-- Comments -->
+      <!-- Render existing comments -->
       <div
-        v-for="(comment, index) in comments"
+        v-for="(comment, index) in currentPageComments"
         :key="'comment-' + index"
         class="comment-container"
         :style="{
@@ -154,21 +153,6 @@
         <div class="comment-icon">💬</div>
         <div class="comment-bubble">
           <div class="comment-content">{{ comment.text }}</div>
-        </div>
-
-        <div
-          class="comment-icon"
-          @mouseenter="showComment(comment)"
-          @mouseleave="hideComment"
-        >
-          💬
-        </div>
-        <div
-          v-if="tooltipVisible && activeComment === comment"
-          class="comment-bubble"
-        >
-          <div class="comment-content">{{ comment.text }}</div>
-          <div class="comment-arrow"></div>
         </div>
       </div>
 
@@ -324,8 +308,8 @@
     </div>
   </div>
 </template>
-
 <script>
+import jsPDF from "jspdf";
 export default {
   props: {
     source: {
@@ -336,6 +320,7 @@ export default {
   data() {
     return {
       images: [],
+      annotationsByPage: [],
       currentPage: 0,
       pageInput: 1,
       startPoint: null,
@@ -370,6 +355,24 @@ export default {
     };
   },
   computed: {
+    currentPageHighlights() {
+      return (
+        this.annotationsByPage[this.currentPage]?.filter(
+          (annotation) => annotation.type === "highlight"
+        ) || []
+      );
+    },
+    currentPageUnderlines() {
+      return (
+        this.annotationsByPage[this.currentPage]?.filter(
+          (annotation) => annotation.type === "underline"
+        ) || []
+      );
+    },
+    currentPageComments() {
+      return this.comments[this.currentPage] || [];
+    },
+
     highlightAnnotations() {
       return this.annotations.filter(
         (annotation) => annotation.type === "highlight"
@@ -422,7 +425,13 @@ export default {
 
         if (this.images.length === 0) {
           alert("No images found in IIIF manifest.");
+        } else {
+          // Initialize annotationsByPage with empty arrays for each page
+          this.annotationsByPage = new Array(this.images.length)
+            .fill()
+            .map(() => []);
         }
+        this.comments = new Array(this.images.length).fill().map(() => []);
       } catch (error) {
         alert("Error fetching IIIF manifest: " + error.message);
       }
@@ -560,13 +569,21 @@ export default {
     nextPage() {
       if (this.currentPage < this.totalPages - 1) {
         this.currentPage++;
-        this.clearAnnotations();
+        if (!this.comments[this.currentPage]) {
+          this.comments[this.currentPage] = [];
+        }
       }
     },
     prevPage() {
-      if (this.currentPage > 0) this.currentPage--;
-      this.clearAnnotations();
+      if (this.currentPage > 0) {
+        this.currentPage--;
+        // Ensure commentsByPage is initialized for the new page
+        if (!this.comments[this.currentPage]) {
+          this.comments[this.currentPage] = [];
+        }
+      }
     },
+
     goToPage() {
       const newPage =
         Math.max(1, Math.min(this.pageInput, this.totalPages)) - 1;
@@ -632,7 +649,7 @@ export default {
           this.croppingStarted = true;
         } else {
           // Finish cropping and add the highlight annotation
-          this.annotations.push({
+          this.annotationsByPage[this.currentPage].push({
             type: "highlight",
             ...this.currentSquare,
           });
@@ -645,7 +662,6 @@ export default {
           console.log("Underline mode started");
           // Start underlining (underline mode)
           const { x, y } = this.getMousePosition(event);
-          //const rect = this.$refs.image.getBoundingClientRect();
           this.startPoint = { x, y };
           this.currentUnderline = {
             type: "underline",
@@ -653,10 +669,10 @@ export default {
             y: y,
             width: 0,
             height: 2,
-            startX: 0, // Relative to the SVG container
-            startY: 0, // Relative to the SVG container
-            endX: 0, // Relative to the SVG container
-            endY: 0, // Relative to the SVG container
+            startX: 0,
+            startY: 0,
+            endX: 0,
+            endY: 0,
           };
           console.log(this.currentUnderline);
           this.croppingStarted = true;
@@ -664,7 +680,7 @@ export default {
           this.measureModeActive = false;
         } else {
           console.log(this.currentUnderline);
-          this.annotations.push(this.currentUnderline);
+          this.annotationsByPage[this.currentPage].push(this.currentUnderline);
           this.croppingStarted = false;
           this.underlineModeActive = false;
           this.currentUnderline = null;
@@ -746,7 +762,11 @@ export default {
     addComment() {
       if (!this.currentCommentText) return;
 
-      this.comments.push({
+      if (!this.comments[this.currentPage]) {
+        this.comments[this.currentPage] = [];
+      }
+
+      this.comments[this.currentPage].push({
         text: this.currentCommentText,
         x: this.currentCommentPosition.x,
         y: this.currentCommentPosition.y + 100,
@@ -763,7 +783,7 @@ export default {
     },
 
     removeComment(index) {
-      this.comments.splice(index, 1);
+      this.comments[this.currentPage].splice(index, 1);
     },
 
     showComment(comment) {
@@ -781,7 +801,7 @@ export default {
       this.draggingCommentIndex = index;
 
       // Calculate the offset between the mouse and comment position
-      const comment = this.comments[index];
+      const comment = this.comments[this.currentPage][index];
       this.dragOffset = {
         x: event.clientX - comment.x,
         y: event.clientY - comment.y,
@@ -790,7 +810,8 @@ export default {
 
     dragComment(event) {
       if (this.draggingCommentIndex !== null) {
-        const comment = this.comments[this.draggingCommentIndex];
+        const comment =
+          this.comments[this.currentPage][this.draggingCommentIndex];
         comment.x = event.clientX - this.dragOffset.x;
         comment.y = event.clientY - this.dragOffset.y;
       }
@@ -1047,13 +1068,120 @@ export default {
         console.error("Error in saveCroppedImage:", error);
       }
     },
+    async saveAnnotations() {
+      console.log("✅ Save button clicked, function started"); // Debugging log
+
+      try {
+        const pdf = new jsPDF();
+        console.log("📄 PDF instance created, empty now"); // Debugging log
+        let hasContent = false; // Flag to check if any page is saved
+
+        for (let i = 0; i < this.images.length; i++) {
+          const annotations = this.annotationsByPage[i] || [];
+          const comments = this.comments[i] || [];
+
+          // ✅ **Skip pages with no annotations or comments**
+          if (annotations.length === 0 && comments.length === 0) {
+            console.log(`⚠️ Skipping empty page ${i + 1}`);
+            continue;
+          }
+
+          console.log(`🔄 Processing page ${i + 1}`); // Debugging log
+          hasContent = true;
+
+          // Load the image as a promise
+          await new Promise((resolve, reject) => {
+            const img = new Image();
+            img.src = this.images[i];
+            img.crossOrigin = "anonymous";
+
+            img.onload = () => {
+              console.log(`🖼️ Image ${i + 1} loaded successfully`);
+
+              const pdfWidth = pdf.internal.pageSize.getWidth();
+              const pdfHeight = (img.height * pdfWidth) / img.width;
+              const scaleX = pdfWidth / img.width;
+              const scaleY = pdfHeight / img.height;
+
+              pdf.addImage(img, "JPEG", 0, 0, pdfWidth, pdfHeight);
+              console.log(`📌 Image ${i + 1} added to PDF`);
+
+              // Draw annotations
+              annotations.forEach((annotation) => {
+                if (annotation.type === "highlight") {
+                  pdf.setFillColor(255, 255, 0, 0.3);
+                  pdf.rect(
+                    annotation.x * scaleX,
+                    annotation.y * scaleY,
+                    annotation.width * scaleX,
+                    annotation.height * scaleY,
+                    "F"
+                  );
+                } else if (annotation.type === "underline") {
+                  pdf.setDrawColor(255, 0, 0);
+                  pdf.setLineWidth(2);
+                  pdf.line(
+                    annotation.x * scaleX,
+                    annotation.y * scaleY,
+                    (annotation.x + annotation.width) * scaleX,
+                    annotation.y * scaleY
+                  );
+                }
+              });
+
+              // Add comments
+              comments.forEach((comment) => {
+                pdf.setFontSize(12);
+                pdf.setTextColor(0, 0, 0);
+                pdf.text(
+                  comment.text,
+                  comment.x * scaleX,
+                  comment.y * scaleY + 10
+                );
+              });
+
+              resolve();
+            };
+
+            img.onerror = (error) => {
+              console.error(`🚨 Error loading image ${i + 1}:`, error);
+              reject(error);
+            };
+          });
+
+          // ✅ **Only add a new page if another annotated page follows**
+          if (i < this.images.length - 1) {
+            for (let j = i + 1; j < this.images.length; j++) {
+              if (
+                this.annotationsByPage[j]?.length > 0 ||
+                this.comments[j]?.length > 0
+              ) {
+                pdf.addPage();
+                break;
+              }
+            }
+          }
+        }
+
+        // ✅ **Only save the PDF if there are annotated pages**
+        if (hasContent) {
+          pdf.save("annotated-document.pdf");
+          console.log("✅ PDF saved successfully in your hard drive");
+        } else {
+          alert("⚠️ No annotations or comments to save!");
+        }
+      } catch (error) {
+        console.error("❌ Error in saveAnnotations, needs to be fixed:", error);
+      }
+    },
+
     startDraggingPoint(index, event) {
       event.preventDefault();
       this.draggingPoint = index;
     },
     clearAnnotations() {
-      this.annotations = [];
-      this.comments = [];
+      this.annotationsByPage[this.currentPage] = [];
+      this.comments[this.currentPage] = [];
       this.strokes = [];
     },
   },

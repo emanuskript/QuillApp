@@ -14,6 +14,8 @@
     "core-js": "^3.8.3",
     "dom-to-image": "^2.6.0",
     "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.2",
+    "pdfmake": "^0.2.18",
     "randomcolor": "^0.6.2",
     "vue": "^3.2.13",
     "vue-router": "^4.4.5"
