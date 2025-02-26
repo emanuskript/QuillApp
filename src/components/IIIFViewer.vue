@@ -309,7 +309,8 @@
   </div>
 </template>
 <script>
-import jsPDF from "jspdf";
+import { PDFDocument } from "pdf-lib";
+import html2canvas from "html2canvas";
 export default {
   props: {
     source: {
@@ -665,7 +666,7 @@ export default {
           this.startPoint = { x, y };
           this.currentUnderline = {
             type: "underline",
-            x: x + 650,
+            x: x + this.$refs.image.getBoundingClientRect().left,
             y: y,
             width: 0,
             height: 2,
@@ -1068,113 +1069,82 @@ export default {
         console.error("Error in saveCroppedImage:", error);
       }
     },
-    async saveAnnotations() {
-      console.log("✅ Save button clicked, function started"); // Debugging log
 
+    async saveAnnotations() {
       try {
-        const pdf = new jsPDF();
-        console.log("📄 PDF instance created, empty now"); // Debugging log
-        let hasContent = false; // Flag to check if any page is saved
+        // Hide the top bar and navigation buttons
+        const topBar = document.querySelector(".top-bar");
+        const navigationBar = document.querySelector(".navigation-bar");
+        if (topBar) topBar.style.display = "none";
+        if (navigationBar) navigationBar.style.display = "none";
+
+        // Loop through each page and save only pages with annotations or comments
+        let hasContent = false;
+
+        // Create a new PDF document
+        const pdfDoc = await PDFDocument.create();
 
         for (let i = 0; i < this.images.length; i++) {
           const annotations = this.annotationsByPage[i] || [];
           const comments = this.comments[i] || [];
 
-          // ✅ **Skip pages with no annotations or comments**
+          // Skip pages without annotations or comments
           if (annotations.length === 0 && comments.length === 0) {
-            console.log(`⚠️ Skipping empty page ${i + 1}`);
+            console.log(`Skipping empty page ${i + 1}`);
             continue;
           }
 
-          console.log(`🔄 Processing page ${i + 1}`); // Debugging log
           hasContent = true;
 
-          // Load the image as a promise
-          await new Promise((resolve, reject) => {
-            const img = new Image();
-            img.src = this.images[i];
-            img.crossOrigin = "anonymous";
+          // Go to the current page
+          this.currentPage = i;
 
-            img.onload = () => {
-              console.log(`🖼️ Image ${i + 1} loaded successfully`);
+          // Wait for the page to render
+          await this.$nextTick();
 
-              const pdfWidth = pdf.internal.pageSize.getWidth();
-              const pdfHeight = (img.height * pdfWidth) / img.width;
-              const scaleX = pdfWidth / img.width;
-              const scaleY = pdfHeight / img.height;
-
-              pdf.addImage(img, "JPEG", 0, 0, pdfWidth, pdfHeight);
-              console.log(`📌 Image ${i + 1} added to PDF`);
-
-              // Draw annotations
-              annotations.forEach((annotation) => {
-                if (annotation.type === "highlight") {
-                  pdf.setFillColor(255, 255, 0, 0.3);
-                  pdf.rect(
-                    annotation.x * scaleX,
-                    annotation.y * scaleY,
-                    annotation.width * scaleX,
-                    annotation.height * scaleY,
-                    "F"
-                  );
-                } else if (annotation.type === "underline") {
-                  pdf.setDrawColor(255, 0, 0);
-                  pdf.setLineWidth(2);
-                  pdf.line(
-                    annotation.x * scaleX,
-                    annotation.y * scaleY,
-                    (annotation.x + annotation.width) * scaleX,
-                    annotation.y * scaleY
-                  );
-                }
-              });
-
-              // Add comments
-              comments.forEach((comment) => {
-                pdf.setFontSize(12);
-                pdf.setTextColor(0, 0, 0);
-                pdf.text(
-                  comment.text,
-                  comment.x * scaleX,
-                  comment.y * scaleY + 10
-                );
-              });
-
-              resolve();
-            };
-
-            img.onerror = (error) => {
-              console.error(`🚨 Error loading image ${i + 1}:`, error);
-              reject(error);
-            };
+          // Capture the content of the pdf-viewer container
+          const viewer = this.$refs.viewer;
+          const canvas = await html2canvas(viewer, {
+            scale: 2, // Increase scale for better quality
+            useCORS: true, // Allow cross-origin images
+            logging: true, // Enable logging for debugging
           });
 
-          // ✅ **Only add a new page if another annotated page follows**
-          if (i < this.images.length - 1) {
-            for (let j = i + 1; j < this.images.length; j++) {
-              if (
-                this.annotationsByPage[j]?.length > 0 ||
-                this.comments[j]?.length > 0
-              ) {
-                pdf.addPage();
-                break;
-              }
-            }
-          }
+          // Convert canvas to image
+          const imgData = canvas.toDataURL("image/png");
+
+          // Add the image to the PDF
+          const image = await pdfDoc.embedPng(imgData);
+          const page = pdfDoc.addPage([image.width, image.height]); // Set page size to match image
+          page.drawImage(image, {
+            x: 0,
+            y: 0,
+            width: image.width,
+            height: image.height,
+          });
         }
 
-        // ✅ **Only save the PDF if there are annotated pages**
+        // Save the PDF if there is content
         if (hasContent) {
-          pdf.save("annotated-document.pdf");
-          console.log("✅ PDF saved successfully in your hard drive");
+          const pdfBytes = await pdfDoc.save();
+          const blob = new Blob([pdfBytes], { type: "application/pdf" });
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(blob);
+          link.download = "annotated-document.pdf";
+          link.click();
+          URL.revokeObjectURL(link.href);
+          console.log("PDF saved successfully");
         } else {
-          alert("⚠️ No annotations or comments to save!");
+          alert("No annotations or comments to save!");
         }
+
+        // Restore the top bar and navigation buttons
+        if (topBar) topBar.style.display = "flex";
+        if (navigationBar) navigationBar.style.display = "flex";
       } catch (error) {
-        console.error("❌ Error in saveAnnotations, needs to be fixed:", error);
+        console.error("Error saving annotations:", error);
       }
     },
-
     startDraggingPoint(index, event) {
       event.preventDefault();
       this.draggingPoint = index;
