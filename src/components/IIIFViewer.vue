@@ -24,6 +24,11 @@
           <i class="fa-solid fa-ruler"></i>
           <span>Measure</span>
         </div>
+        <!-- New Length Button -->
+        <div class="toolbar-item" @click="showLengthPopup">
+          <i class="fa-solid fa-ruler-vertical"></i>
+          <span>Length</span>
+        </div>
         <div class="toolbar-item" @click="saveAnnotations">
           <i class="fa-solid fa-save"></i>
           <span>Save</span>
@@ -32,6 +37,28 @@
           <i class="fa-regular fa-trash-can"></i>
           <span>Clear</span>
         </div>
+      </div>
+    </div>
+
+    <!-- Length Popup -->
+    <div v-if="showLengthPopupVisible" class="length-popup">
+      <div class="length-popup-content">
+        <h3>Select Measurement Type</h3>
+        <select v-model="selectedMeasurement">
+          <option value="ascenders">Ascenders</option>
+          <option value="descenders">Descenders</option>
+          <option value="interlinear">Interlinear Spaces</option>
+        </select>
+        <div class="color-preview">
+          <div
+            v-for="(color, index) in measurementColors"
+            :key="index"
+            :style="{ backgroundColor: color }"
+            class="color-box"
+          ></div>
+        </div>
+        <button @click="confirmLengthMeasurement">Confirm</button>
+        <button @click="hideLengthPopup">Cancel</button>
       </div>
     </div>
 
@@ -80,6 +107,23 @@
         }"
       />
 
+      <!-- Render length measurements -->
+      <div
+        v-for="(measurement, index) in lengthMeasurements"
+        :key="'length-' + index"
+        class="length-measurement"
+        :style="{
+          left: `${measurement.x}px`,
+          top: `${measurement.y}px`,
+          height: `${measurement.height}px`,
+          backgroundColor: measurement.color,
+          position: 'absolute',
+        }"
+      >
+        <div class="length-label">
+          {{ measurement.label }}: {{ measurement.height }}px
+        </div>
+      </div>
       <!-- Render existing highlights -->
       <div
         v-for="(annotation, index) in currentPageHighlights"
@@ -334,6 +378,14 @@ export default {
       annotations: [],
       popupDimensions: { width: 0, height: 0 },
       strokes: [],
+      showLengthPopupVisible: false,
+      selectedMeasurement: "ascenders",
+      measurementColors: {
+        ascenders: "rgba(0, 255, 0, 0.5)", // Transparent green
+        descenders: "rgba(0, 0, 255, 0.5)", // Transparent blue
+        interlinear: "rgba(255, 165, 0, 0.5)", // Transparent orange
+      },
+      lengthMeasurements: [],
       currentStroke: null,
       dynamicTracePath: "",
       measurePoints: [], // Points for angle measurement
@@ -1154,6 +1206,37 @@ export default {
       this.comments[this.currentPage] = [];
       this.strokes = [];
     },
+
+    showLengthPopup() {
+      this.showLengthPopupVisible = true;
+    },
+    hideLengthPopup() {
+      this.showLengthPopupVisible = false;
+    },
+    confirmLengthMeasurement() {
+      this.hideLengthPopup();
+      this.startLengthMeasurement();
+    },
+    startLengthMeasurement() {
+      this.$refs.viewer.addEventListener(
+        "click",
+        this.handleLengthMeasurementClick
+      );
+    },
+    handleLengthMeasurementClick(event) {
+      const { x, y } = this.getMousePosition(event);
+      const height = 100; // Example height, you can adjust this based on user input or other logic
+      const color = this.measurementColors[this.selectedMeasurement];
+      const label = this.selectedMeasurement;
+
+      this.lengthMeasurements.push({
+        x,
+        y,
+        height,
+        color,
+        label,
+      });
+    },
   },
 };
 </script>
@@ -1404,5 +1487,64 @@ export default {
 
 .btn-cancel-comment:hover {
   background-color: #5a6268;
+}
+
+.length-popup {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+}
+
+.length-popup-content {
+  background-color: white;
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  text-align: center;
+}
+.color-preview {
+  display: flex;
+  justify-content: space-around;
+  margin: 20px 0;
+}
+
+.color-box {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #ccc;
+}
+
+button {
+  margin: 0px;
+  padding: 5px 5px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: #007bff;
+  color: white;
+}
+
+.length-measurement {
+  width: 10px;
+  position: absolute;
+}
+
+.length-label {
+  position: absolute;
+  left: 15px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: black;
+  font-size: 12px;
 }
 </style>
