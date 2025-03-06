@@ -26,8 +26,8 @@
         </div>
         <!-- New Length Button -->
         <div class="toolbar-item" @click="showLengthPopup">
-          <i class="fa-solid fa-ruler-vertical"></i>
-          <span>Length</span>
+          <i class="fa-solid fa-ruler-horizontal"></i>
+          <span>Horizontal Bands</span>
         </div>
         <div class="toolbar-item" @click="saveAnnotations">
           <i class="fa-solid fa-save"></i>
@@ -41,21 +41,73 @@
     </div>
 
     <!-- Length Popup -->
+    <!-- Length Popup -->
     <div v-if="showLengthPopupVisible" class="length-popup">
       <div class="length-popup-content">
         <h3>Select Measurement Type</h3>
         <select v-model="selectedMeasurement">
-          <option value="ascenders">Ascenders</option>
-          <option value="descenders">Descenders</option>
-          <option value="interlinear">Interlinear Spaces</option>
+          <option value="Ascender">Ascenders</option>
+          <option value="Descenders">Descenders</option>
+          <option value="Interlinear">Interlinear Spaces</option>
+          <option value="Upper Margin">Upper Margin</option>
+          <option value="Lower Margin">Lower Margin</option>
         </select>
         <div class="color-preview">
-          <div
-            v-for="(color, index) in measurementColors"
-            :key="index"
-            :style="{ backgroundColor: color }"
-            class="color-box"
-          ></div>
+          <div>
+            <div
+              style="font-size: 10px; text-align: center; margin-bottom: 5px"
+            >
+              Ascenders
+            </div>
+            <div
+              :style="{ backgroundColor: measurementColors.ascenders }"
+              class="color-box"
+            ></div>
+          </div>
+          <div>
+            <div
+              style="font-size: 10px; text-align: center; margin-bottom: 5px"
+            >
+              Descenders
+            </div>
+            <div
+              :style="{ backgroundColor: measurementColors.descenders }"
+              class="color-box"
+            ></div>
+          </div>
+          <div>
+            <div
+              style="font-size: 10px; text-align: center; margin-bottom: 5px"
+            >
+              Interlinear
+            </div>
+            <div
+              :style="{ backgroundColor: measurementColors.interlinear }"
+              class="color-box"
+            ></div>
+          </div>
+          <div>
+            <div
+              style="font-size: 10px; text-align: center; margin-bottom: 5px"
+            >
+              Upper Margin
+            </div>
+            <div
+              :style="{ backgroundColor: measurementColors.upperMargin }"
+              class="color-box"
+            ></div>
+          </div>
+          <div>
+            <div
+              style="font-size: 10px; text-align: center; margin-bottom: 5px"
+            >
+              Lower Margin
+            </div>
+            <div
+              :style="{ backgroundColor: measurementColors.lowerMargin }"
+              class="color-box"
+            ></div>
+          </div>
         </div>
         <button @click="confirmLengthMeasurement">Confirm</button>
         <button @click="hideLengthPopup">Cancel</button>
@@ -107,7 +159,25 @@
         }"
       />
 
-      <!-- Render length measurements -->
+      <!-- Render dynamic length measurement rectangle -->
+      <div
+        v-if="isMeasuring && currentSquare"
+        class="length-measurement"
+        :style="{
+          left: `${currentSquare.x}px`,
+          top: `${currentSquare.y}px`,
+          width: `${currentSquare.width}px`,
+          height: `${currentSquare.height}px`,
+          backgroundColor: currentSquare.color,
+          position: 'absolute',
+        }"
+      >
+        <div class="length-label">
+          {{ currentSquare.label }}: {{ currentSquare.height }}px
+        </div>
+      </div>
+
+      <!-- Render finalized length measurements -->
       <div
         v-for="(measurement, index) in lengthMeasurements"
         :key="'length-' + index"
@@ -115,6 +185,7 @@
         :style="{
           left: `${measurement.x}px`,
           top: `${measurement.y}px`,
+          width: `${measurement.width}px`,
           height: `${measurement.height}px`,
           backgroundColor: measurement.color,
           position: 'absolute',
@@ -384,6 +455,8 @@ export default {
         ascenders: "rgba(0, 255, 0, 0.5)", // Transparent green
         descenders: "rgba(0, 0, 255, 0.5)", // Transparent blue
         interlinear: "rgba(255, 165, 0, 0.5)", // Transparent orange
+        upperMargin: "rgba(255, 0, 0, 0.5)", // Transparent red
+        lowerMargin: "rgba(128, 0, 128, 0.5)", // Transparent purple
       },
       lengthMeasurements: [],
       currentStroke: null,
@@ -402,6 +475,7 @@ export default {
       currentCommentText: "",
       currentCommentPosition: null,
       comments: [],
+      isMeasuring: false,
       draggingCommentIndex: null, // Index of the comment being dragged
       dragOffset: { x: 0, y: 0 }, // Offset between the mouse and comment position
       scalingFactor: 1,
@@ -488,6 +562,21 @@ export default {
       } catch (error) {
         alert("Error fetching IIIF manifest: " + error.message);
       }
+    },
+
+    getMousePosition(event) {
+      const viewerElement = this.$refs.viewer;
+      if (!viewerElement) {
+        console.error("Viewer element not available.");
+        return { x: 0, y: 0 };
+      }
+      const rect = viewerElement.getBoundingClientRect();
+      const scrollLeft = viewerElement.scrollLeft;
+      const scrollTop = viewerElement.scrollTop;
+      return {
+        x: event.clientX - rect.left + scrollLeft,
+        y: event.clientY - rect.top + scrollTop,
+      };
     },
 
     getPopupMousePosition(event) {
@@ -697,6 +786,7 @@ export default {
       if (this.highlightModeActive) {
         if (!this.croppingStarted && event.button === 0) {
           // Start cropping
+          const { x, y } = this.getMousePosition(event);
           this.startPoint = { x, y };
           this.currentSquare = { x, y, width: 0, height: 0 };
           this.croppingStarted = true;
@@ -718,7 +808,7 @@ export default {
           this.startPoint = { x, y };
           this.currentUnderline = {
             type: "underline",
-            x: x + this.$refs.image.getBoundingClientRect().left,
+            x: x,
             y: y,
             width: 0,
             height: 2,
@@ -772,9 +862,7 @@ export default {
         const { x, y } = this.getMousePosition(event);
 
         this.currentSquare = {
-          x:
-            Math.min(x, this.startPoint.x) +
-            this.$refs.image.getBoundingClientRect().left,
+          x: Math.min(x, this.startPoint.x),
           y: Math.min(y, this.startPoint.y),
           width: Math.abs(x - this.startPoint.x),
           height: Math.abs(y - this.startPoint.y),
@@ -873,16 +961,6 @@ export default {
     // Stop dragging
     stopDraggingComment() {
       this.draggingCommentIndex = null;
-    },
-
-    getMousePosition(event) {
-      const imageElement = this.$refs.image;
-      if (!imageElement) {
-        console.error("Image element not available.");
-        return { x: 0, y: 0 };
-      }
-      const rect = imageElement.getBoundingClientRect();
-      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
     },
 
     startAnnotating(event) {
@@ -1208,34 +1286,81 @@ export default {
     },
 
     showLengthPopup() {
-      this.showLengthPopupVisible = true;
+      this.showLengthPopupVisible = true; // Show the popup
     },
-    hideLengthPopup() {
-      this.showLengthPopupVisible = false;
-    },
-    confirmLengthMeasurement() {
-      this.hideLengthPopup();
-      this.startLengthMeasurement();
-    },
-    startLengthMeasurement() {
-      this.$refs.viewer.addEventListener(
-        "click",
-        this.handleLengthMeasurementClick
-      );
-    },
-    handleLengthMeasurementClick(event) {
-      const { x, y } = this.getMousePosition(event);
-      const height = 100; // Example height, you can adjust this based on user input or other logic
-      const color = this.measurementColors[this.selectedMeasurement];
-      const label = this.selectedMeasurement;
 
-      this.lengthMeasurements.push({
-        x,
-        y,
-        height,
-        color,
-        label,
-      });
+    hideLengthPopup() {
+      this.showLengthPopupVisible = false; // Hide the popup
+    },
+
+    confirmLengthMeasurement() {
+      this.hideLengthPopup(); // Hide the popup
+      this.startLengthMeasurement(); // Start the length measurement process
+    },
+
+    startLengthMeasurement() {
+      this.lengthMeasurementActive = true; // Activate length measurement mode
+      this.$refs.viewer.addEventListener("mousedown", this.startLength);
+      this.$refs.viewer.addEventListener("mousemove", this.updateLength);
+    },
+
+    startLength(event) {
+      if (!this.lengthMeasurementActive) return; // Exit if length measurement is not active
+
+      const { x, y } = this.getMousePosition(event);
+
+      if (!this.croppingStarted) {
+        // First click: Start the measurement
+        this.startPoint = { x, y };
+        this.currentSquare = {
+          x: x, // Use the x coordinate relative to the image
+          y: y, // Use the y coordinate relative to the image
+          width: 0,
+          height: 0,
+          color: this.measurementColors[this.selectedMeasurement], // Use selected color
+          label: this.selectedMeasurement, // Add label for the measurement type
+        };
+        this.croppingStarted = true;
+      } else {
+        // Second click: Finalize the measurement
+        this.lengthMeasurements.push({
+          ...this.currentSquare,
+          type: "length",
+          height: this.currentSquare.height, // Store the height
+        });
+
+        // Add the measurement to the annotationsByPage array for persistence
+        this.annotationsByPage[this.currentPage].push({
+          type: "length",
+          ...this.currentSquare,
+        });
+
+        // Reset state
+        this.startPoint = null;
+        this.currentSquare = null;
+        this.croppingStarted = false;
+        this.lengthMeasurementActive = false; // Deactivate length measurement mode
+      }
+    },
+
+    updateLength(event) {
+      if (
+        !this.lengthMeasurementActive ||
+        !this.croppingStarted ||
+        !this.startPoint
+      )
+        return;
+
+      const { x, y } = this.getMousePosition(event);
+
+      this.currentSquare = {
+        x: Math.min(x, this.startPoint.x), // Use the smaller x value
+        y: Math.min(y, this.startPoint.y), // Use the smaller y value
+        width: Math.abs(x - this.startPoint.x), // Calculate width
+        height: Math.abs(y - this.startPoint.y), // Calculate height
+        color: this.measurementColors[this.selectedMeasurement], // Use selected color
+        label: this.selectedMeasurement, // Maintain label
+      };
     },
   },
 };
@@ -1504,21 +1629,24 @@ export default {
 
 .length-popup-content {
   background-color: white;
-  padding: 20px;
+  padding: 30px;
   border-radius: 10px;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
   text-align: center;
+  width: 400px;
 }
 .color-preview {
   display: flex;
   justify-content: space-around;
   margin: 20px 0;
+  flex-wrap: wrap;
 }
 
 .color-box {
   width: 30px;
   height: 30px;
   border: 1px solid #ccc;
+  margin: 5px;
 }
 
 button {
@@ -1535,16 +1663,20 @@ button:hover {
 }
 
 .length-measurement {
-  width: 10px;
   position: absolute;
+  border: 2px solid rgba(0, 0, 0, 0.5); /* Add a border for visibility */
+  pointer-events: none; /* Ensure it doesn't block mouse events */
 }
 
 .length-label {
   position: absolute;
-  left: 15px;
+  left: 15px; /* Adjust label position */
   top: 50%;
   transform: translateY(-50%);
   color: black;
   font-size: 12px;
+  background-color: white; /* Add background for readability */
+  padding: 2px 5px;
+  border-radius: 3px;
 }
 </style>
