@@ -21,13 +21,21 @@
           <span>Trace</span>
         </div>
         <div class="toolbar-item" @click="selectTool('measure')">
-          <i class="fa-solid fa-ruler"></i>
+          <i class="fa-solid fa-angle-up"></i>
           <span>Measure</span>
+          <span>Angle</span>
         </div>
         <!-- New Length Button -->
-        <div class="toolbar-item" @click="showLengthPopup">
+        <div class="toolbar-item" @click="showLengthPopup('horizontal')">
           <i class="fa-solid fa-ruler-horizontal"></i>
-          <span>Horizontal Bands</span>
+          <span>Horizontal</span>
+          <span>Bands</span>
+        </div>
+
+        <div class="toolbar-item" @click="showLengthPopup('vertical')">
+          <i class="fa-solid fa-ruler-vertical"></i>
+          <span>Vertical</span>
+          <span>Bands</span>
         </div>
         <div class="toolbar-item" @click="saveAnnotations">
           <i class="fa-solid fa-save"></i>
@@ -39,73 +47,91 @@
         </div>
       </div>
     </div>
-
-    <!-- Length Popup -->
-    <!-- Length Popup -->
-    <div v-if="showLengthPopupVisible" class="length-popup">
+    <!-- Horizontal Bands Popup -->
+    <div v-if="showHorizontalPopup" class="length-popup">
       <div class="length-popup-content">
-        <h3>Select Measurement Type</h3>
+        <h3>Select Horizontal Measurement Type</h3>
         <select v-model="selectedMeasurement">
-          <option value="ascenders">Ascenders</option>
-          <option value="descenders">Descenders</option>
-          <option value="interlinear">Interlinear Spaces</option>
-          <option value="upperMargin">Upper Margin</option>
-          <option value="lowerMargin">Lower Margin</option>
+          <option value="Ascender">Ascenders</option>
+          <option value="Descenders">Descenders</option>
+          <option value="Interlinear">Interlinear Spaces</option>
+          <option value="Upper Margin">Upper Margin</option>
+          <option value="Lower Margin">Lower Margin</option>
         </select>
         <div class="color-preview">
-          <div>
-            <div
-              style="font-size: 10px; text-align: center; margin-bottom: 5px"
-            >
-              Ascenders
-            </div>
+          <div style="padding: 10px; text-align: center">
+            <div style="font-size: 12px; margin-bottom: 10px">Ascenders</div>
             <div
               :style="{ backgroundColor: measurementColors.ascenders }"
               class="color-box"
+              style="margin: 0 auto"
             ></div>
           </div>
-          <div>
-            <div
-              style="font-size: 10px; text-align: center; margin-bottom: 5px"
-            >
-              Descenders
-            </div>
+          <div style="padding: 10px; text-align: center">
+            <div style="font-size: 12px; margin-bottom: 10px">Descenders</div>
             <div
               :style="{ backgroundColor: measurementColors.descenders }"
               class="color-box"
+              style="margin: 0 auto"
             ></div>
           </div>
-          <div>
-            <div
-              style="font-size: 10px; text-align: center; margin-bottom: 5px"
-            >
-              Interlinear
-            </div>
+          <div style="padding: 10px; text-align: center">
+            <div style="font-size: 12px; margin-bottom: 10px">Interlinear</div>
             <div
               :style="{ backgroundColor: measurementColors.interlinear }"
               class="color-box"
+              style="margin: 0 auto"
             ></div>
           </div>
-          <div>
-            <div
-              style="font-size: 10px; text-align: center; margin-bottom: 5px"
-            >
-              Upper Margin
-            </div>
+          <div style="padding: 10px; text-align: center">
+            <div style="font-size: 12px; margin-bottom: 10px">Upper Margin</div>
             <div
               :style="{ backgroundColor: measurementColors.upperMargin }"
               class="color-box"
+              style="margin: 0 auto"
             ></div>
           </div>
-          <div>
-            <div
-              style="font-size: 10px; text-align: center; margin-bottom: 5px"
-            >
-              Lower Margin
-            </div>
+          <div style="padding: 10px; text-align: center">
+            <div style="font-size: 12px; margin-bottom: 10px">Lower Margin</div>
             <div
               :style="{ backgroundColor: measurementColors.lowerMargin }"
               class="color-box"
+              style="margin: 0 auto"
+            ></div>
+          </div>
+        </div>
+        <button @click="confirmLengthMeasurement">Confirm</button>
+        <button @click="hideLengthPopup">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Vertical Bands Popup -->
+    <div v-if="showVerticalPopup" class="length-popup">
+      <div class="length-popup-content">
+        <h3>Select Vertical Measurement Type</h3>
+        <select v-model="selectedMeasurement">
+          <option value="internalMargin">Internal Margin</option>
+          <option value="intercolumnSpaces">Intercolumn Spaces</option>
+        </select>
+        <div class="color-preview">
+          <div style="padding: 10px; text-align: center">
+            <div style="font-size: 12px; margin-bottom: 10px">
+              Internal Margin
+            </div>
+            <div
+              :style="{ backgroundColor: measurementColors.internalMargin }"
+              class="color-box"
+              style="margin: 0 auto"
+            ></div>
+          </div>
+          <div style="padding: 10px; text-align: center">
+            <div style="font-size: 12px; margin-bottom: 10px">
+              Intercolumn Spaces
+            </div>
+            <div
+              :style="{ backgroundColor: measurementColors.intercolumnSpaces }"
+              class="color-box"
+              style="margin: 0 auto"
             ></div>
           </div>
         </div>
@@ -451,6 +477,9 @@ export default {
       popupDimensions: { width: 0, height: 0 },
       strokes: [],
       showLengthPopupVisible: false,
+      showHorizontalPopup: false, // Controls visibility of the horizontal popup
+      showVerticalPopup: false, // Controls visibility of the vertical popup
+      measurementType: "horizontal",
       selectedMeasurement: "ascenders",
       measurementColors: {
         ascenders: "rgba(0, 255, 0, 0.5)", // Transparent green
@@ -458,6 +487,8 @@ export default {
         interlinear: "rgba(255, 165, 0, 0.5)", // Transparent orange
         upperMargin: "rgba(255, 0, 0, 0.5)", // Transparent red
         lowerMargin: "rgba(128, 0, 128, 0.5)", // Transparent purple
+        internalMargin: "rgba(0, 255, 255, 0.5)", // Transparent cyan
+        intercolumnSpaces: "rgba(255, 0, 255, 0.5)", // Transparent magenta
       },
       lengthMeasurements: {
         ascenders: [],
@@ -465,6 +496,8 @@ export default {
         interlinear: [],
         upperMargin: [],
         lowerMargin: [],
+        internalMargin: [],
+        intercolumnSpaces: [],
       },
       currentStroke: null,
       dynamicTracePath: "",
@@ -1304,12 +1337,19 @@ export default {
       this.strokes = [];
     },
 
-    showLengthPopup() {
-      this.showLengthPopupVisible = true; // Show the popup
+    showLengthPopup(type) {
+      if (type === "horizontal") {
+        this.showHorizontalPopup = true;
+        this.showVerticalPopup = false;
+      } else if (type === "vertical") {
+        this.showVerticalPopup = true;
+        this.showHorizontalPopup = false;
+      }
+      this.measurementType = type; // Store the measurement type (horizontal or vertical)
     },
-
     hideLengthPopup() {
-      this.showLengthPopupVisible = false; // Hide the popup
+      this.showHorizontalPopup = false;
+      this.showVerticalPopup = false;
     },
 
     confirmLengthMeasurement() {
@@ -1354,6 +1394,7 @@ export default {
           ...this.currentSquare,
           type: "length",
           height: this.currentSquare.height, // Store the height
+          width: this.currentSquare.width, // Store the width
         });
 
         // Add the measurement to the annotationsByPage array for persistence
