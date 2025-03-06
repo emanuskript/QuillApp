@@ -46,11 +46,11 @@
       <div class="length-popup-content">
         <h3>Select Measurement Type</h3>
         <select v-model="selectedMeasurement">
-          <option value="Ascender">Ascenders</option>
-          <option value="Descenders">Descenders</option>
-          <option value="Interlinear">Interlinear Spaces</option>
-          <option value="Upper Margin">Upper Margin</option>
-          <option value="Lower Margin">Lower Margin</option>
+          <option value="ascenders">Ascenders</option>
+          <option value="descenders">Descenders</option>
+          <option value="interlinear">Interlinear Spaces</option>
+          <option value="upperMargin">Upper Margin</option>
+          <option value="lowerMargin">Lower Margin</option>
         </select>
         <div class="color-preview">
           <div>
@@ -179,7 +179,7 @@
 
       <!-- Render finalized length measurements -->
       <div
-        v-for="(measurement, index) in lengthMeasurements"
+        v-for="(measurement, index) in currentPageLengthMeasurements"
         :key="'length-' + index"
         class="length-measurement"
         :style="{
@@ -195,6 +195,7 @@
           {{ measurement.label }}: {{ measurement.height }}px
         </div>
       </div>
+
       <!-- Render existing highlights -->
       <div
         v-for="(annotation, index) in currentPageHighlights"
@@ -458,7 +459,13 @@ export default {
         upperMargin: "rgba(255, 0, 0, 0.5)", // Transparent red
         lowerMargin: "rgba(128, 0, 128, 0.5)", // Transparent purple
       },
-      lengthMeasurements: [],
+      lengthMeasurements: {
+        ascenders: [],
+        descenders: [],
+        interlinear: [],
+        upperMargin: [],
+        lowerMargin: [],
+      },
       currentStroke: null,
       dynamicTracePath: "",
       measurePoints: [], // Points for angle measurement
@@ -482,6 +489,18 @@ export default {
     };
   },
   computed: {
+    currentPageLengthMeasurements() {
+      // Combine all measurements for the current page from all labels
+      const measurements = [];
+      for (const label in this.lengthMeasurements) {
+        if (this.lengthMeasurements[label][this.currentPage]) {
+          measurements.push(
+            ...this.lengthMeasurements[label][this.currentPage]
+          );
+        }
+      }
+      return measurements;
+    },
     currentPageHighlights() {
       return (
         this.annotationsByPage[this.currentPage]?.filter(
@@ -1323,7 +1342,15 @@ export default {
         this.croppingStarted = true;
       } else {
         // Second click: Finalize the measurement
-        this.lengthMeasurements.push({
+        const currentLabel = this.selectedMeasurement;
+
+        // Initialize the array for the current label and page if it doesn't exist
+        if (!this.lengthMeasurements[currentLabel][this.currentPage]) {
+          this.lengthMeasurements[currentLabel][this.currentPage] = [];
+        }
+
+        // Add the measurement to the current label and page
+        this.lengthMeasurements[currentLabel][this.currentPage].push({
           ...this.currentSquare,
           type: "length",
           height: this.currentSquare.height, // Store the height
@@ -1629,24 +1656,21 @@ export default {
 
 .length-popup-content {
   background-color: white;
-  padding: 30px;
+  padding: 20px;
   border-radius: 10px;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
   text-align: center;
-  width: 400px;
 }
 .color-preview {
   display: flex;
   justify-content: space-around;
   margin: 20px 0;
-  flex-wrap: wrap;
 }
 
 .color-box {
   width: 30px;
   height: 30px;
   border: 1px solid #ccc;
-  margin: 5px;
 }
 
 button {
