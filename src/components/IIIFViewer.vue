@@ -116,7 +116,7 @@
         <div class="color-preview">
           <div style="padding: 10px; text-align: center">
             <div style="font-size: 12px; margin-bottom: 10px">
-              Internal Margin
+              InternalMargin
             </div>
             <div
               :style="{ backgroundColor: measurementColors.internalMargin }"
@@ -126,7 +126,7 @@
           </div>
           <div style="padding: 10px; text-align: center">
             <div style="font-size: 12px; margin-bottom: 10px">
-              Intercolumn Spaces
+              IntercolumnSpaces
             </div>
             <div
               :style="{ backgroundColor: measurementColors.intercolumnSpaces }"
@@ -1429,6 +1429,10 @@ export default {
         color: this.measurementColors[this.selectedMeasurement], // Use selected color
         label: this.selectedMeasurement, // Maintain label
       };
+    },
+
+    selectMeasurement(measurement) {
+      this.selectedMeasurement = measurement;
     },
   },
 };
