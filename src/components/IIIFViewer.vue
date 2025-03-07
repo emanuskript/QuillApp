@@ -1430,10 +1430,6 @@ export default {
         label: this.selectedMeasurement, // Maintain label
       };
     },
-
-    selectMeasurement(measurement) {
-      this.selectedMeasurement = measurement;
-    },
   },
 };
 </script>
