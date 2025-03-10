@@ -37,6 +37,19 @@
           <span>Vertical</span>
           <span>Bands</span>
         </div>
+
+        <!-- Add the Calculate button -->
+        <div class="toolbar-item" @click="toggleCalculateDropdown">
+          <i class="fa-solid fa-calculator"></i>
+          <span>Calculate</span>
+          <!-- Dropdown Menu -->
+          <div v-if="showCalculateDropdown" class="calculate-dropdown">
+            <div @click="calculateCurrentPage">Calculate Current Page</div>
+            <div @click="calculateEntireDocument">
+              Calculate Entire Document
+            </div>
+          </div>
+        </div>
         <div class="toolbar-item" @click="saveAnnotations">
           <i class="fa-solid fa-save"></i>
           <span>Save</span>
@@ -52,11 +65,11 @@
       <div class="length-popup-content">
         <h3>Select Horizontal Measurement Type</h3>
         <select v-model="selectedMeasurement">
-          <option value="Ascender">Ascenders</option>
-          <option value="Descenders">Descenders</option>
-          <option value="Interlinear">Interlinear Spaces</option>
-          <option value="Upper Margin">Upper Margin</option>
-          <option value="Lower Margin">Lower Margin</option>
+          <option value="ascenders">Ascenders</option>
+          <option value="descenders">Descenders</option>
+          <option value="interlinear">Interlinear Spaces</option>
+          <option value="upperMargin">Upper Margin</option>
+          <option value="lowerMargin">Lower Margin</option>
         </select>
         <div class="color-preview">
           <div style="padding: 10px; text-align: center">
@@ -219,6 +232,30 @@
       >
         <div class="length-label">
           {{ measurement.label }}: {{ measurement.height }}px
+        </div>
+      </div>
+
+      <!-- Statistics Popup -->
+      <div v-if="showStatistics" class="statistics-popup">
+        <div class="statistics-popup-content">
+          <h3>Statistics</h3>
+          <div>
+            <h4>Vertical Length</h4>
+            <p>Average: {{ statistics.averageVertical }}</p>
+            <p>
+              Standard Deviation: {{ statistics.standardDeviationVertical }}
+            </p>
+            <p>Mode: {{ statistics.modeVertical }}</p>
+          </div>
+          <div>
+            <h4>Horizontal Length</h4>
+            <p>Average: {{ statistics.averageHorizontal }}</p>
+            <p>
+              Standard Deviation: {{ statistics.standardDeviationHorizontal }}
+            </p>
+            <p>Mode: {{ statistics.modeHorizontal }}</p>
+          </div>
+          <button @click="closeStatisticsPopup">Close</button>
         </div>
       </div>
 
@@ -464,6 +501,7 @@ export default {
     return {
       images: [],
       annotationsByPage: [],
+      showCalculateDropdown: false,
       currentPage: 0,
       pageInput: 1,
       startPoint: null,
@@ -479,7 +517,7 @@ export default {
       showLengthPopupVisible: false,
       showHorizontalPopup: false, // Controls visibility of the horizontal popup
       showVerticalPopup: false, // Controls visibility of the vertical popup
-      measurementType: "horizontal",
+      measurementType: "vertical",
       selectedMeasurement: "ascenders",
       measurementColors: {
         ascenders: "rgba(0, 255, 0, 0.5)", // Transparent green
@@ -1339,13 +1377,14 @@ export default {
 
     showLengthPopup(type) {
       if (type === "horizontal") {
+        this.selectedMeasurement = "ascenders";
         this.showHorizontalPopup = true;
         this.showVerticalPopup = false;
       } else if (type === "vertical") {
+        this.selectedMeasurement = "internalMargin";
         this.showVerticalPopup = true;
         this.showHorizontalPopup = false;
       }
-      this.measurementType = type; // Store the measurement type (horizontal or vertical)
     },
     hideLengthPopup() {
       this.showHorizontalPopup = false;
@@ -1364,40 +1403,46 @@ export default {
     },
 
     startLength(event) {
-      if (!this.lengthMeasurementActive) return; // Exit if length measurement is not active
+      if (!this.lengthMeasurementActive) return;
 
       const { x, y } = this.getMousePosition(event);
 
       if (!this.croppingStarted) {
-        // First click: Start the measurement
         this.startPoint = { x, y };
         this.currentSquare = {
-          x: x, // Use the x coordinate relative to the image
-          y: y, // Use the y coordinate relative to the image
+          x: x,
+          y: y,
           width: 0,
           height: 0,
-          color: this.measurementColors[this.selectedMeasurement], // Use selected color
-          label: this.selectedMeasurement, // Add label for the measurement type
+          color: this.measurementColors[this.selectedMeasurement], // Set color
+          label: this.selectedMeasurement,
         };
         this.croppingStarted = true;
+
+        // Debug log
+        console.log("Selected Measurement:", this.selectedMeasurement);
+        console.log(
+          "Current Square Color:",
+          this.measurementColors[this.selectedMeasurement]
+        );
       } else {
         // Second click: Finalize the measurement
         const currentLabel = this.selectedMeasurement;
 
-        // Initialize the array for the current label and page if it doesn't exist
+        if (!this.lengthMeasurements[currentLabel]) {
+          this.lengthMeasurements[currentLabel] = [];
+        }
         if (!this.lengthMeasurements[currentLabel][this.currentPage]) {
           this.lengthMeasurements[currentLabel][this.currentPage] = [];
         }
 
-        // Add the measurement to the current label and page
         this.lengthMeasurements[currentLabel][this.currentPage].push({
           ...this.currentSquare,
           type: "length",
-          height: this.currentSquare.height, // Store the height
-          width: this.currentSquare.width, // Store the width
+          height: this.currentSquare.height,
+          width: this.currentSquare.width,
         });
 
-        // Add the measurement to the annotationsByPage array for persistence
         this.annotationsByPage[this.currentPage].push({
           type: "length",
           ...this.currentSquare,
@@ -1407,7 +1452,7 @@ export default {
         this.startPoint = null;
         this.currentSquare = null;
         this.croppingStarted = false;
-        this.lengthMeasurementActive = false; // Deactivate length measurement mode
+        this.lengthMeasurementActive = false;
       }
     },
 
@@ -1429,6 +1474,85 @@ export default {
         color: this.measurementColors[this.selectedMeasurement], // Use selected color
         label: this.selectedMeasurement, // Maintain label
       };
+    },
+
+    toggleCalculateDropdown() {
+      this.showCalculateDropdown = !this.showCalculateDropdown;
+    },
+    calculateCurrentPage() {
+      this.showCalculateDropdown = false;
+      this.showStatisticsPopup(this.getCurrentPageStatistics());
+    },
+    calculateEntireDocument() {
+      this.showCalculateDropdown = false;
+      this.showStatisticsPopup(this.getEntireDocumentStatistics());
+    },
+    getCurrentPageStatistics() {
+      const verticalLengths = this.getVerticalLengths(this.currentPage);
+      const horizontalLengths = this.getHorizontalLengths(this.currentPage);
+      return {
+        averageVertical: this.calculateAverage(verticalLengths),
+        standardDeviationVertical:
+          this.calculateStandardDeviation(verticalLengths),
+        modeVertical: this.calculateMode(verticalLengths),
+        averageHorizontal: this.calculateAverage(horizontalLengths),
+        standardDeviationHorizontal:
+          this.calculateStandardDeviation(horizontalLengths),
+        modeHorizontal: this.calculateMode(horizontalLengths),
+      };
+    },
+    getEntireDocumentStatistics() {
+      let verticalLengths = [];
+      let horizontalLengths = [];
+      for (let i = 0; i < this.totalPages; i++) {
+        verticalLengths = verticalLengths.concat(this.getVerticalLengths(i));
+        horizontalLengths = horizontalLengths.concat(
+          this.getHorizontalLengths(i)
+        );
+      }
+      return {
+        averageVertical: this.calculateAverage(verticalLengths),
+        standardDeviationVertical:
+          this.calculateStandardDeviation(verticalLengths),
+        modeVertical: this.calculateMode(verticalLengths),
+        averageHorizontal: this.calculateAverage(horizontalLengths),
+        standardDeviationHorizontal:
+          this.calculateStandardDeviation(horizontalLengths),
+        modeHorizontal: this.calculateMode(horizontalLengths),
+      };
+    },
+    getVerticalLengths(page) {
+      // Implement logic to get vertical lengths for the given page
+      return this.lengthMeasurements.vertical[page] || [];
+    },
+    getHorizontalLengths(page) {
+      // Implement logic to get horizontal lengths for the given page
+      return this.lengthMeasurements.horizontal[page] || [];
+    },
+    calculateAverage(values) {
+      const sum = values.reduce((acc, val) => acc + val, 0);
+      return sum / values.length;
+    },
+    calculateStandardDeviation(values) {
+      const avg = this.calculateAverage(values);
+      const squareDiffs = values.map((val) => Math.pow(val - avg, 2));
+      const avgSquareDiff = this.calculateAverage(squareDiffs);
+      return Math.sqrt(avgSquareDiff);
+    },
+    calculateMode(values) {
+      const frequency = {};
+      values.forEach((val) => (frequency[val] = (frequency[val] || 0) + 1));
+      const mode = Object.keys(frequency).reduce((a, b) =>
+        frequency[a] > frequency[b] ? a : b
+      );
+      return parseFloat(mode);
+    },
+    showStatisticsPopup(stats) {
+      this.statistics = stats;
+      this.showStatistics = true;
+    },
+    closeStatisticsPopup() {
+      this.showStatistics = false;
     },
   },
 };
@@ -1743,5 +1867,74 @@ button:hover {
   background-color: white; /* Add background for readability */
   padding: 2px 5px;
   border-radius: 3px;
+}
+
+.calculate-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background-color: white;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+}
+
+.calculate-dropdown div {
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.calculate-dropdown div:hover {
+  background-color: #f1f1f1;
+}
+
+.statistics-popup {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+}
+
+.statistics-popup-content {
+  background-color: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  max-width: 400px;
+  width: 100%;
+}
+
+.statistics-popup-content h3 {
+  margin-bottom: 16px;
+}
+
+.statistics-popup-content h4 {
+  margin-top: 12px;
+  margin-bottom: 8px;
+}
+
+.statistics-popup-content p {
+  margin: 4px 0;
+}
+
+.statistics-popup-content button {
+  margin-top: 16px;
+  padding: 8px 16px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.statistics-popup-content button:hover {
+  background-color: #0056b3;
 }
 </style>
