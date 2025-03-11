@@ -39,13 +39,16 @@
         </div>
 
         <!-- Add the Calculate button -->
-        <div class="toolbar-item" @click="toggleCalculateDropdown">
+        <div
+          class="toolbar-item calculate-container"
+          @click.stop="toggleCalculateDropdown"
+        >
           <i class="fa-solid fa-calculator"></i>
           <span>Calculate</span>
           <!-- Dropdown Menu -->
           <div v-if="showCalculateDropdown" class="calculate-dropdown">
-            <div @click="calculateCurrentPage">Calculate Current Page</div>
-            <div @click="calculateEntireDocument">
+            <div @click.stop="calculateCurrentPage">Calculate Current Page</div>
+            <div @click.stop="calculateEntireDocument">
               Calculate Entire Document
             </div>
           </div>
@@ -239,22 +242,49 @@
       <div v-if="showStatistics" class="statistics-popup">
         <div class="statistics-popup-content">
           <h3>Statistics</h3>
-          <div>
-            <h4>Vertical Length</h4>
-            <p>Average: {{ statistics.averageVertical }}</p>
-            <p>
-              Standard Deviation: {{ statistics.standardDeviationVertical }}
-            </p>
-            <p>Mode: {{ statistics.modeVertical }}</p>
-          </div>
-          <div>
-            <h4>Horizontal Length</h4>
-            <p>Average: {{ statistics.averageHorizontal }}</p>
-            <p>
-              Standard Deviation: {{ statistics.standardDeviationHorizontal }}
-            </p>
-            <p>Mode: {{ statistics.modeHorizontal }}</p>
-          </div>
+
+          <!-- Horizontal Lengths -->
+          <h4>Horizontal Lengths</h4>
+          <table>
+            <thead>
+              <tr>
+                <th>Measurement</th>
+                <th>Average</th>
+                <th>Standard Deviation</th>
+                <th>Mode</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(stats, type) in horizontalStatistics" :key="type">
+                <td>{{ type }}</td>
+                <td>{{ stats.average.toFixed(2) }}</td>
+                <td>{{ stats.standardDeviation.toFixed(2) }}</td>
+                <td>{{ stats.mode.toFixed(2) }}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- Vertical Lengths -->
+          <h4>Vertical Lengths</h4>
+          <table>
+            <thead>
+              <tr>
+                <th>Measurement</th>
+                <th>Average</th>
+                <th>Standard Deviation</th>
+                <th>Mode</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(stats, type) in verticalStatistics" :key="type">
+                <td>{{ type }}</td>
+                <td>{{ stats.average.toFixed(2) }}</td>
+                <td>{{ stats.standardDeviation.toFixed(2) }}</td>
+                <td>{{ stats.mode.toFixed(2) }}</td>
+              </tr>
+            </tbody>
+          </table>
+
           <button @click="closeStatisticsPopup">Close</button>
         </div>
       </div>
@@ -499,7 +529,10 @@ export default {
   },
   data() {
     return {
+      showStatistics: false,
       images: [],
+      horizontalStatistics: {}, // Stores horizontal statistics
+      verticalStatistics: {},
       annotationsByPage: [],
       showCalculateDropdown: false,
       currentPage: 0,
@@ -528,14 +561,22 @@ export default {
         internalMargin: "rgba(0, 255, 255, 0.5)", // Transparent cyan
         intercolumnSpaces: "rgba(255, 0, 255, 0.5)", // Transparent magenta
       },
+      statistics: {
+        averageVertical: 0,
+        standardDeviationVertical: 0,
+        modeVertical: 0,
+        averageHorizontal: 0,
+        standardDeviationHorizontal: 0,
+        modeHorizontal: 0,
+      },
       lengthMeasurements: {
-        ascenders: [],
-        descenders: [],
-        interlinear: [],
-        upperMargin: [],
-        lowerMargin: [],
-        internalMargin: [],
-        intercolumnSpaces: [],
+        ascenders: {},
+        descenders: {},
+        interlinear: {},
+        upperMargin: {},
+        lowerMargin: {},
+        internalMargin: {},
+        intercolumnSpaces: {},
       },
       currentStroke: null,
       dynamicTracePath: "",
@@ -1418,34 +1459,24 @@ export default {
           label: this.selectedMeasurement,
         };
         this.croppingStarted = true;
-
-        // Debug log
-        console.log("Selected Measurement:", this.selectedMeasurement);
-        console.log(
-          "Current Square Color:",
-          this.measurementColors[this.selectedMeasurement]
-        );
       } else {
         // Second click: Finalize the measurement
         const currentLabel = this.selectedMeasurement;
 
+        // Ensure the nested structure exists
         if (!this.lengthMeasurements[currentLabel]) {
-          this.lengthMeasurements[currentLabel] = [];
+          this.lengthMeasurements[currentLabel] = {};
         }
         if (!this.lengthMeasurements[currentLabel][this.currentPage]) {
           this.lengthMeasurements[currentLabel][this.currentPage] = [];
         }
 
+        // Add the measurement
         this.lengthMeasurements[currentLabel][this.currentPage].push({
           ...this.currentSquare,
           type: "length",
           height: this.currentSquare.height,
           width: this.currentSquare.width,
-        });
-
-        this.annotationsByPage[this.currentPage].push({
-          type: "length",
-          ...this.currentSquare,
         });
 
         // Reset state
@@ -1476,8 +1507,26 @@ export default {
       };
     },
 
+    // Calculate statistics for a specific measurement type and page
+    calculateStatisticsForType(type, page) {
+      const measurements = this.lengthMeasurements[type]?.[page] || [];
+      const values =
+        type === "internalMargin" || type === "intercolumnSpaces"
+          ? measurements.map((m) => m.height) // Vertical measurements use height
+          : measurements.map((m) => m.width); // Horizontal measurements use width
+
+      console.log("Values for", type, "on page", page, ":", values); // Debugging
+
+      return {
+        average: this.calculateAverage(values),
+        standardDeviation: this.calculateStandardDeviation(values),
+        mode: this.calculateMode(values),
+      };
+    },
+
     toggleCalculateDropdown() {
       this.showCalculateDropdown = !this.showCalculateDropdown;
+      console.log("Dropdown toggled");
     },
     calculateCurrentPage() {
       this.showCalculateDropdown = false;
@@ -1521,34 +1570,119 @@ export default {
         modeHorizontal: this.calculateMode(horizontalLengths),
       };
     },
-    getVerticalLengths(page) {
-      // Implement logic to get vertical lengths for the given page
-      return this.lengthMeasurements.vertical[page] || [];
+    getHorizontalStatistics() {
+      const horizontalTypes = [
+        "ascenders",
+        "descenders",
+        "interlinear",
+        "upperMargin",
+        "lowerMargin",
+      ];
+      const statistics = {};
+
+      horizontalTypes.forEach((type) => {
+        if (
+          this.lengthMeasurements[type] &&
+          this.lengthMeasurements[type][this.currentPage]
+        ) {
+          statistics[type] = this.calculateStatisticsForType(
+            type,
+            this.currentPage
+          );
+        }
+      });
+
+      return statistics;
     },
+    getVerticalLengths(page) {
+      const verticalTypes = ["internalMargin", "intercolumnSpaces"];
+      let verticalLengths = [];
+
+      verticalTypes.forEach((type) => {
+        if (
+          this.lengthMeasurements[type] &&
+          this.lengthMeasurements[type][page]
+        ) {
+          verticalLengths = verticalLengths.concat(
+            this.lengthMeasurements[type][page].map((m) => m.height) // Use height for vertical measurements
+          );
+        }
+      });
+
+      console.log("Vertical Lengths for Page", page, ":", verticalLengths); // Debugging
+      return verticalLengths;
+    },
+
     getHorizontalLengths(page) {
-      // Implement logic to get horizontal lengths for the given page
-      return this.lengthMeasurements.horizontal[page] || [];
+      const horizontalTypes = [
+        "ascenders",
+        "descenders",
+        "interlinear",
+        "upperMargin",
+        "lowerMargin",
+      ];
+      let horizontalLengths = [];
+
+      horizontalTypes.forEach((type) => {
+        if (
+          this.lengthMeasurements[type] &&
+          this.lengthMeasurements[type][page]
+        ) {
+          horizontalLengths = horizontalLengths.concat(
+            this.lengthMeasurements[type][page].map((m) => m.width) // Use width for horizontal measurements
+          );
+        }
+      });
+
+      console.log("Horizontal Lengths for Page", page, ":", horizontalLengths); // Debugging
+      return horizontalLengths;
+    },
+    // Get all vertical statistics for the current page
+    getVerticalStatistics() {
+      const verticalTypes = ["internalMargin", "intercolumnSpaces"];
+      const statistics = {};
+
+      verticalTypes.forEach((type) => {
+        if (
+          this.lengthMeasurements[type] &&
+          this.lengthMeasurements[type][this.currentPage]
+        ) {
+          statistics[type] = this.calculateStatisticsForType(
+            type,
+            this.currentPage
+          );
+        }
+      });
+
+      return statistics;
     },
     calculateAverage(values) {
+      if (!values || values.length === 0) return 0; // Return 0 for empty arrays
       const sum = values.reduce((acc, val) => acc + val, 0);
       return sum / values.length;
     },
     calculateStandardDeviation(values) {
+      if (!values || values.length === 0) return 0; // Return 0 for empty arrays
       const avg = this.calculateAverage(values);
-      const squareDiffs = values.map((val) => Math.pow(val - avg, 2));
-      const avgSquareDiff = this.calculateAverage(squareDiffs);
-      return Math.sqrt(avgSquareDiff);
+      const squareDiffs = values.map((val) => (val - avg) ** 2);
+      const variance =
+        squareDiffs.reduce((acc, val) => acc + val, 0) / values.length; // Population formula
+      return Math.sqrt(variance);
     },
+
     calculateMode(values) {
+      if (!values || values.length === 0) return 0; // Return 0 for empty arrays
       const frequency = {};
       values.forEach((val) => (frequency[val] = (frequency[val] || 0) + 1));
-      const mode = Object.keys(frequency).reduce((a, b) =>
-        frequency[a] > frequency[b] ? a : b
+      const maxFrequency = Math.max(...Object.values(frequency));
+      const modes = Object.keys(frequency).filter(
+        (key) => frequency[key] === maxFrequency
       );
-      return parseFloat(mode);
+      return parseFloat(Math.min(...modes));
     },
-    showStatisticsPopup(stats) {
-      this.statistics = stats;
+    showStatisticsPopup() {
+      this.horizontalStatistics = this.getHorizontalStatistics();
+      this.verticalStatistics = this.getVerticalStatistics();
       this.showStatistics = true;
     },
     closeStatisticsPopup() {
@@ -1869,15 +2003,20 @@ button:hover {
   border-radius: 3px;
 }
 
+.calculate-container {
+  position: relative;
+}
+
 .calculate-dropdown {
   position: absolute;
-  top: 100%;
+  top: 100%; /* Position below the button */
   left: 0;
   background-color: white;
   border: 1px solid #ccc;
   border-radius: 4px;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-  z-index: 1000;
+  z-index: 1000; /* Ensure it appears above other elements */
+  min-width: 150px; /* Set a minimum width */
 }
 
 .calculate-dropdown div {
@@ -1911,8 +2050,25 @@ button:hover {
   width: 100%;
 }
 
+.statistics-popup-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 20px;
+}
+
 .statistics-popup-content h3 {
   margin-bottom: 16px;
+}
+
+.statistics-popup-content th,
+.statistics-popup-content td {
+  border: 1px solid #ddd;
+  padding: 8px;
+  text-align: center;
+}
+
+.statistics-popup-content th {
+  background-color: #f2f2f2;
 }
 
 .statistics-popup-content h4 {
