@@ -1511,9 +1511,13 @@ export default {
     calculateStatisticsForType(type, page) {
       const measurements = this.lengthMeasurements[type]?.[page] || [];
       const values =
-        type === "internalMargin" || type === "intercolumnSpaces"
-          ? measurements.map((m) => m.height) // Vertical measurements use height
-          : measurements.map((m) => m.width); // Horizontal measurements use width
+        type === "ascenders" ||
+        type === "descenders" ||
+        type === "interlinear" ||
+        type === "upperMargin" ||
+        type === "lowerMargin"
+          ? measurements.map((m) => m.width) // Horizontal measurements use width
+          : measurements.map((m) => m.height); // Vertical measurements use height
 
       console.log("Values for", type, "on page", page, ":", values); // Debugging
 
