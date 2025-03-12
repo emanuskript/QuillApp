@@ -231,10 +231,20 @@
           height: `${measurement.height}px`,
           backgroundColor: measurement.color,
           position: 'absolute',
+          border: '1px solid black', // Add a border for better visibility
         }"
       >
         <div class="length-label">
-          {{ measurement.label }}: {{ measurement.height }}px
+          {{ measurement.label }}:
+          {{
+            measurement.label === "ascenders" ||
+            measurement.label === "descenders" ||
+            measurement.label === "interlinear" ||
+            measurement.label === "upperMargin" ||
+            measurement.label === "lowerMargin"
+              ? measurement.height
+              : measurement.width
+          }}px
         </div>
       </div>
 
@@ -1351,23 +1361,23 @@ export default {
         if (topBar) topBar.style.display = "none";
         if (navigationBar) navigationBar.style.display = "none";
 
-        // Loop through each page and save only pages with annotations or comments
-        let hasContent = false;
-
         // Create a new PDF document
         const pdfDoc = await PDFDocument.create();
 
         for (let i = 0; i < this.images.length; i++) {
           const annotations = this.annotationsByPage[i] || [];
           const comments = this.comments[i] || [];
+          const lengthMeasurements = this.currentPageLengthMeasurements || [];
 
-          // Skip pages without annotations or comments
-          if (annotations.length === 0 && comments.length === 0) {
+          // Skip pages without annotations, comments, or length measurements
+          if (
+            annotations.length === 0 &&
+            comments.length === 0 &&
+            lengthMeasurements.length === 0
+          ) {
             console.log(`Skipping empty page ${i + 1}`);
             continue;
           }
-
-          hasContent = true;
 
           // Go to the current page
           this.currentPage = i;
@@ -1381,6 +1391,13 @@ export default {
             scale: 2, // Increase scale for better quality
             useCORS: true, // Allow cross-origin images
             logging: true, // Enable logging for debugging
+            ignoreElements: (element) => {
+              // Exclude unnecessary elements (e.g., buttons, toolbars)
+              return (
+                element.classList.contains("top-bar") ||
+                element.classList.contains("navigation-bar")
+              );
+            },
           });
 
           // Convert canvas to image
@@ -1398,18 +1415,14 @@ export default {
         }
 
         // Save the PDF if there is content
-        if (hasContent) {
-          const pdfBytes = await pdfDoc.save();
-          const blob = new Blob([pdfBytes], { type: "application/pdf" });
-          const link = document.createElement("a");
-          link.href = URL.createObjectURL(blob);
-          link.download = "annotated-document.pdf";
-          link.click();
-          URL.revokeObjectURL(link.href);
-          console.log("PDF saved successfully");
-        } else {
-          alert("No annotations or comments to save!");
-        }
+        const pdfBytes = await pdfDoc.save();
+        const blob = new Blob([pdfBytes], { type: "application/pdf" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "annotated-document.pdf";
+        link.click();
+        URL.revokeObjectURL(link.href);
+        console.log("PDF saved successfully");
 
         // Restore the top bar and navigation buttons
         if (topBar) topBar.style.display = "flex";
@@ -1425,6 +1438,15 @@ export default {
     clearAnnotations() {
       this.annotationsByPage[this.currentPage] = [];
       this.comments[this.currentPage] = [];
+      this.lengthMeasurements = {
+        ascenders: {},
+        descenders: {},
+        interlinear: {},
+        upperMargin: {},
+        lowerMargin: {},
+        internalMargin: {},
+        intercolumnSpaces: {},
+      };
       this.strokes = [];
     },
 
@@ -1742,9 +1764,14 @@ export default {
       return statistics;
     },
     extractValues(measurements, type) {
-      return measurements.map((m) =>
-        type === "internalMargin" || type === "ascenders" ? m.height : m.width
-      );
+      // Define vertical measurement types
+      const verticalTypes = ["internalMargin", "intercolumnSpaces"];
+
+      // Determine if the type is vertical
+      const isVertical = verticalTypes.includes(type);
+
+      // Extract "height" for vertical measurements, "width" for horizontal measurements
+      return measurements.map((m) => (isVertical ? m.width : m.height));
     },
 
     // Calculate average
