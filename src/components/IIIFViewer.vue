@@ -259,7 +259,13 @@
                 <td>{{ type }}</td>
                 <td>{{ stats.average.toFixed(2) }}</td>
                 <td>{{ stats.standardDeviation.toFixed(2) }}</td>
-                <td>{{ stats.mode.toFixed(2) }}</td>
+                <td>
+                  {{
+                    typeof stats.mode === "number"
+                      ? stats.mode.toFixed(2)
+                      : stats.mode
+                  }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -280,7 +286,13 @@
                 <td>{{ type }}</td>
                 <td>{{ stats.average.toFixed(2) }}</td>
                 <td>{{ stats.standardDeviation.toFixed(2) }}</td>
-                <td>{{ stats.mode.toFixed(2) }}</td>
+                <td>
+                  {{
+                    typeof stats.mode === "number"
+                      ? stats.mode.toFixed(2)
+                      : stats.mode
+                  }}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -1541,38 +1553,107 @@ export default {
       this.showStatisticsPopup(this.getEntireDocumentStatistics());
     },
     getCurrentPageStatistics() {
-      const verticalLengths = this.getVerticalLengths(this.currentPage);
-      const horizontalLengths = this.getHorizontalLengths(this.currentPage);
-      return {
-        averageVertical: this.calculateAverage(verticalLengths),
-        standardDeviationVertical:
-          this.calculateStandardDeviation(verticalLengths),
-        modeVertical: this.calculateMode(verticalLengths),
-        averageHorizontal: this.calculateAverage(horizontalLengths),
-        standardDeviationHorizontal:
-          this.calculateStandardDeviation(horizontalLengths),
-        modeHorizontal: this.calculateMode(horizontalLengths),
-      };
+      const horizontalTypes = [
+        "ascenders",
+        "descenders",
+        "interlinear",
+        "upperMargin",
+        "lowerMargin",
+      ];
+      const verticalTypes = ["internalMargin", "intercolumnSpaces"];
+      const statistics = {};
+
+      // Calculate horizontal statistics
+      horizontalTypes.forEach((type) => {
+        if (
+          this.lengthMeasurements[type] &&
+          this.lengthMeasurements[type][this.currentPage]
+        ) {
+          const values = this.extractValues(
+            this.lengthMeasurements[type][this.currentPage],
+            type
+          );
+          statistics[type] = {
+            average: this.calculateAverage(values),
+            standardDeviation: this.calculateStandardDeviation(values),
+            mode: this.calculateMode(values),
+          };
+        }
+      });
+
+      // Calculate vertical statistics
+      verticalTypes.forEach((type) => {
+        if (
+          this.lengthMeasurements[type] &&
+          this.lengthMeasurements[type][this.currentPage]
+        ) {
+          const values = this.extractValues(
+            this.lengthMeasurements[type][this.currentPage],
+            type
+          );
+          statistics[type] = {
+            average: this.calculateAverage(values),
+            standardDeviation: this.calculateStandardDeviation(values),
+            mode: this.calculateMode(values),
+          };
+        }
+      });
+
+      return statistics;
     },
+    // Get statistics for the entire document
     getEntireDocumentStatistics() {
-      let verticalLengths = [];
-      let horizontalLengths = [];
-      for (let i = 0; i < this.totalPages; i++) {
-        verticalLengths = verticalLengths.concat(this.getVerticalLengths(i));
-        horizontalLengths = horizontalLengths.concat(
-          this.getHorizontalLengths(i)
-        );
-      }
-      return {
-        averageVertical: this.calculateAverage(verticalLengths),
-        standardDeviationVertical:
-          this.calculateStandardDeviation(verticalLengths),
-        modeVertical: this.calculateMode(verticalLengths),
-        averageHorizontal: this.calculateAverage(horizontalLengths),
-        standardDeviationHorizontal:
-          this.calculateStandardDeviation(horizontalLengths),
-        modeHorizontal: this.calculateMode(horizontalLengths),
-      };
+      const horizontalTypes = [
+        "ascenders",
+        "descenders",
+        "interlinear",
+        "upperMargin",
+        "lowerMargin",
+      ];
+      const verticalTypes = ["internalMargin", "intercolumnSpaces"];
+      const statistics = {};
+
+      // Calculate horizontal statistics
+      horizontalTypes.forEach((type) => {
+        let values = [];
+        for (let page = 0; page < this.totalPages; page++) {
+          if (
+            this.lengthMeasurements[type] &&
+            this.lengthMeasurements[type][page]
+          ) {
+            values = values.concat(
+              this.extractValues(this.lengthMeasurements[type][page], type)
+            );
+          }
+        }
+        statistics[type] = {
+          average: this.calculateAverage(values),
+          standardDeviation: this.calculateStandardDeviation(values),
+          mode: this.calculateMode(values),
+        };
+      });
+
+      // Calculate vertical statistics
+      verticalTypes.forEach((type) => {
+        let values = [];
+        for (let page = 0; page < this.totalPages; page++) {
+          if (
+            this.lengthMeasurements[type] &&
+            this.lengthMeasurements[type][page]
+          ) {
+            values = values.concat(
+              this.extractValues(this.lengthMeasurements[type][page], type)
+            );
+          }
+        }
+        statistics[type] = {
+          average: this.calculateAverage(values),
+          standardDeviation: this.calculateStandardDeviation(values),
+          mode: this.calculateMode(values),
+        };
+      });
+
+      return statistics;
     },
     getHorizontalStatistics() {
       const horizontalTypes = [
@@ -1660,35 +1741,96 @@ export default {
 
       return statistics;
     },
+    extractValues(measurements, type) {
+      return measurements.map((m) =>
+        type === "internalMargin" || type === "ascenders" ? m.height : m.width
+      );
+    },
+
+    // Calculate average
     calculateAverage(values) {
       if (!values || values.length === 0) return 0; // Return 0 for empty arrays
-      const sum = values.reduce((acc, val) => acc + val, 0);
-      return sum / values.length;
+
+      // Ensure all values are numbers
+      const numericValues = values
+        .map((val) => parseFloat(val))
+        .filter((val) => !isNaN(val));
+
+      if (numericValues.length === 0) return 0; // Return 0 if no valid numbers
+
+      const sum = numericValues.reduce((acc, val) => acc + val, 0);
+      return sum / numericValues.length;
     },
+    // Calculate standard deviation
     calculateStandardDeviation(values) {
       if (!values || values.length === 0) return 0; // Return 0 for empty arrays
-      const avg = this.calculateAverage(values);
-      const squareDiffs = values.map((val) => (val - avg) ** 2);
+
+      // Ensure all values are numbers
+      const numericValues = values
+        .map((val) => parseFloat(val))
+        .filter((val) => !isNaN(val));
+
+      if (numericValues.length === 0) return 0; // Return 0 if no valid numbers
+
+      const avg = this.calculateAverage(numericValues);
+      const squareDiffs = numericValues.map((val) => (val - avg) ** 2);
       const variance =
-        squareDiffs.reduce((acc, val) => acc + val, 0) / values.length; // Population formula
+        squareDiffs.reduce((acc, val) => acc + val, 0) / numericValues.length; // Population formula
       return Math.sqrt(variance);
     },
 
+    // Calculate mode
     calculateMode(values) {
-      if (!values || values.length === 0) return 0; // Return 0 for empty arrays
+      if (!values || values.length === 0) return "No mode"; // Return "No mode" for empty arrays
+
+      // Ensure all values are numbers
+      const numericValues = values
+        .map((val) => parseFloat(val))
+        .filter((val) => !isNaN(val));
+
+      if (numericValues.length === 0) return "No mode"; // Return "No mode" if no valid numbers
+
       const frequency = {};
-      values.forEach((val) => (frequency[val] = (frequency[val] || 0) + 1));
+      numericValues.forEach(
+        (val) => (frequency[val] = (frequency[val] || 0) + 1)
+      );
+
       const maxFrequency = Math.max(...Object.values(frequency));
+
+      // If all values appear only once, return "No mode"
+      if (maxFrequency === 1) return "No mode";
+
       const modes = Object.keys(frequency).filter(
         (key) => frequency[key] === maxFrequency
       );
+
+      // Return the smallest mode if there are multiple modes
       return parseFloat(Math.min(...modes));
     },
-    showStatisticsPopup() {
-      this.horizontalStatistics = this.getHorizontalStatistics();
-      this.verticalStatistics = this.getVerticalStatistics();
+    showStatisticsPopup(statistics) {
+      this.horizontalStatistics = {};
+      this.verticalStatistics = {};
+
+      // Separate horizontal and vertical statistics
+      for (const [type, stats] of Object.entries(statistics)) {
+        if (
+          [
+            "ascenders",
+            "descenders",
+            "interlinear",
+            "upperMargin",
+            "lowerMargin",
+          ].includes(type)
+        ) {
+          this.horizontalStatistics[type] = stats;
+        } else if (["internalMargin", "intercolumnSpaces"].includes(type)) {
+          this.verticalStatistics[type] = stats;
+        }
+      }
+
       this.showStatistics = true;
     },
+
     closeStatisticsPopup() {
       this.showStatistics = false;
     },
