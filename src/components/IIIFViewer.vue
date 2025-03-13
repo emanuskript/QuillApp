@@ -16,11 +16,19 @@
           <i class="fa-regular fa-comment"></i>
           <span>Comment</span>
         </div>
-        <div class="toolbar-item" @click="selectTool('trace')">
+        <div
+          class="toolbar-item"
+          @click="selectTool('trace')"
+          data-tool="trace"
+        >
           <i class="fa-solid fa-pencil"></i>
           <span>Trace</span>
         </div>
-        <div class="toolbar-item" @click="selectTool('measure')">
+        <div
+          class="toolbar-item"
+          @click="selectTool('measure')"
+          data-tool="measure"
+        >
           <i class="fa-solid fa-angle-up"></i>
           <span>Measure</span>
           <span>Angle</span>
@@ -37,6 +45,76 @@
           <span>Vertical</span>
           <span>Bands</span>
         </div>
+
+        <div class="tool-message" v-if="toolMessage">{{ toolMessage }}</div>
+
+        <svg
+          v-if="traceModeActive || measureModeActive"
+          class="drawing-layer"
+          :width="viewerWidth"
+          :height="viewerHeight"
+        >
+          <!-- Render existing traces -->
+          <polyline
+            v-for="(stroke, index) in strokes"
+            :key="'stroke-' + index"
+            :points="formatPoints(stroke.points)"
+            :stroke="stroke.color"
+            stroke-width="2"
+            fill="none"
+          />
+
+          <!-- Render dynamic trace -->
+          <polyline
+            v-if="dynamicTracePath"
+            :points="dynamicTracePath"
+            stroke="red"
+            stroke-width="2"
+            fill="none"
+          />
+
+          <!-- Render angle measurement points -->
+          <circle
+            v-for="(point, index) in measurePoints"
+            :key="'measure-point-' + index"
+            :cx="point.x"
+            :cy="point.y"
+            r="5"
+            fill="red"
+          />
+
+          <!-- Render angle measurement lines -->
+          <line
+            v-if="measurePoints.length >= 2"
+            :x1="measurePoints[0].x"
+            :y1="measurePoints[0].y"
+            :x2="measurePoints[1].x"
+            :y2="measurePoints[1].y"
+            stroke="blue"
+            stroke-width="2"
+          />
+          <line
+            v-if="measurePoints.length === 3"
+            :x1="measurePoints[1].x"
+            :y1="measurePoints[1].y"
+            :x2="measurePoints[2].x"
+            :y2="measurePoints[2].y"
+            stroke="blue"
+            stroke-width="2"
+          />
+
+          <!-- Render angle text -->
+          <text
+            v-if="measurePoints.length === 3"
+            :x="measurePoints[1].x + 10"
+            :y="measurePoints[1].y - 10"
+            font-size="12"
+            fill="black"
+            style="background-color: white; padding: 2px"
+          >
+            {{ calculatedAngle }}°
+          </text>
+        </svg>
 
         <!-- Add the Calculate button -->
         <div
@@ -416,126 +494,88 @@
       ></div>
 
       <!-- Cropped Image Pop-up -->
-      <div v-if="croppedImage" class="blurred-background">
-        <div class="svg-popup">
-          <h3>Interactive Cropped Image</h3>
-          <svg
-            :width="popupDimensions.width"
-            :height="popupDimensions.height"
-            @mousedown="startAnnotating"
-            @mousemove="annotateImage"
-            @mouseup="endAnnotating"
-            @mouseleave="endAnnotating"
-            xmlns="http://www.w3.org/2000/svg"
-            class="interactive-svg"
-          >
-            <!-- Render cropped image -->
-            <foreignObject
-              :width="popupDimensions.width"
-              :height="popupDimensions.height"
-            >
-              <div v-html="croppedSvg"></div>
-            </foreignObject>
+      <svg
+        :width="popupDimensions.width"
+        :height="popupDimensions.height"
+        @mousedown="startAnnotating"
+        @mousemove="annotateImage"
+        @mouseup="endAnnotating"
+        @mouseleave="endAnnotating"
+        xmlns="http://www.w3.org/2000/svg"
+        class="interactive-svg"
+      >
+        <!-- Render cropped image -->
+        <foreignObject
+          :width="popupDimensions.width"
+          :height="popupDimensions.height"
+        >
+          <div v-html="croppedSvg"></div>
+        </foreignObject>
 
-            <!-- Render existing strokes -->
-            <polyline
-              v-for="(stroke, index) in strokes"
-              :key="'stroke-' + index"
-              :points="formatPoints(stroke.points)"
-              :stroke="stroke.color"
-              stroke-width="2"
-              fill="none"
-            ></polyline>
+        <!-- Render existing strokes -->
+        <polyline
+          v-for="(stroke, index) in strokes"
+          :key="'stroke-' + index"
+          :points="formatPoints(stroke.points)"
+          :stroke="stroke.color"
+          stroke-width="2"
+          fill="none"
+        ></polyline>
 
-            <!-- Render dynamic path while drawing -->
-            <polyline
-              v-if="dynamicTracePath"
-              :points="dynamicTracePath"
-              stroke="red"
-              stroke-width="2"
-              fill="none"
-            ></polyline>
+        <!-- Render dynamic path while drawing -->
+        <polyline
+          v-if="dynamicTracePath"
+          :points="dynamicTracePath"
+          stroke="red"
+          stroke-width="2"
+          fill="none"
+        ></polyline>
 
-            <!-- Render draggable points for angle measurement -->
-            <circle
-              v-for="(point, index) in measurePoints"
-              :key="'measure-point-' + index"
-              :cx="point.x"
-              :cy="point.y"
-              r="8"
-              fill="red"
-              style="cursor: pointer"
-              @mousedown="startDraggingPoint(index, $event)"
-            ></circle>
+        <!-- Render draggable points for angle measurement -->
+        <circle
+          v-for="(point, index) in measurePoints"
+          :key="'measure-point-' + index"
+          :cx="point.x"
+          :cy="point.y"
+          r="8"
+          fill="red"
+          style="cursor: pointer"
+          @mousedown="startDraggingPoint(index, $event)"
+        ></circle>
 
-            <!-- Draw lines between points -->
-            <line
-              v-if="measurePoints.length >= 2"
-              :x1="measurePoints[0].x"
-              :y1="measurePoints[0].y"
-              :x2="measurePoints[1].x"
-              :y2="measurePoints[1].y"
-              stroke="blue"
-              stroke-width="2"
-            ></line>
-            <text
-              v-if="measurePoints.length >= 2"
-              :x="(measurePoints[0].x + measurePoints[1].x) / 2"
-              :y="(measurePoints[0].y + measurePoints[1].y) / 2 - 10"
-              font-size="12"
-              fill="black"
-            >
-              {{
-                calculateRelativeLength(
-                  measurePoints[0],
-                  measurePoints[1]
-                ).toFixed(2)
-              }}
-              px
-            </text>
+        <!-- Draw lines between points -->
+        <line
+          v-if="measurePoints.length >= 2"
+          :x1="measurePoints[0].x"
+          :y1="measurePoints[0].y"
+          :x2="measurePoints[1].x"
+          :y2="measurePoints[1].y"
+          stroke="blue"
+          stroke-width="2"
+        ></line>
 
-            <line
-              v-if="measurePoints.length === 3"
-              :x1="measurePoints[1].x"
-              :y1="measurePoints[1].y"
-              :x2="measurePoints[2].x"
-              :y2="measurePoints[2].y"
-              stroke="blue"
-              stroke-width="2"
-            ></line>
-            <text
-              v-if="measurePoints.length === 3"
-              :x="(measurePoints[1].x + measurePoints[2].x) / 2"
-              :y="(measurePoints[1].y + measurePoints[2].y) / 2 - 10"
-              font-size="12"
-              fill="black"
-            >
-              {{
-                calculateRelativeLength(
-                  measurePoints[1],
-                  measurePoints[2]
-                ).toFixed(2)
-              }}
-              px
-            </text>
+        <line
+          v-if="measurePoints.length === 3"
+          :x1="measurePoints[1].x"
+          :y1="measurePoints[1].y"
+          :x2="measurePoints[2].x"
+          :y2="measurePoints[2].y"
+          stroke="blue"
+          stroke-width="2"
+        ></line>
 
-            <!-- Angle Display -->
-            <text
-              v-if="measurePoints.length === 3"
-              :x="measurePoints[1].x + 20"
-              :y="measurePoints[1].y - 10"
-              font-size="16"
-              fill="black"
-            >
-              {{ calculatedAngle }}°
-            </text>
-          </svg>
-          <div class="popup-buttons">
-            <button @click="saveCroppedImage">Save</button>
-            <button @click="discardCroppedImage">Discard</button>
-          </div>
-        </div>
-      </div>
+        <!-- Angle Display -->
+        <text
+          v-if="measurePoints.length === 3"
+          :x="measurePoints[1].x + 20"
+          :y="measurePoints[1].y - 10"
+          font-size="16"
+          fill="black"
+          style="background-color: white; padding: 2px"
+        >
+          {{ calculatedAngle }}°
+        </text>
+      </svg>
     </div>
   </div>
 </template>
@@ -557,6 +597,7 @@ export default {
       verticalStatistics: {},
       annotationsByPage: [],
       showCalculateDropdown: false,
+      toolMessage: "",
       currentPage: 0,
       pageInput: 1,
       startPoint: null,
@@ -893,10 +934,12 @@ export default {
         this.traceModeActive = true;
         this.measureModeActive = false;
         this.croppedImage = false; // Reset croppedImage when Trace is selected
+        this.showToolMessage("To deactivate tracing, reclick the button");
       } else if (tool === "measure") {
         this.measureModeActive = true;
         this.traceModeActive = false;
         this.croppedImage = false; // Reset croppedImage when Measure is selected
+        this.showToolMessage("To deactivate measuring, reclick the button");
       } else if (tool === "highlight") {
         this.highlightModeActive = true;
       } else if (tool === "underline") {
@@ -913,6 +956,13 @@ export default {
         this.highlightModeActive = false;
         this.underlineModeActive = false;
       }
+    },
+
+    showToolMessage(message) {
+      this.toolMessage = message;
+      setTimeout(() => {
+        this.toolMessage = "";
+      }, 3000);
     },
     handleImageLoad() {
       const imageElement = this.$refs.image;
@@ -934,7 +984,6 @@ export default {
       ) {
         return; // Exit the function early
       }
-      const { x, y } = this.getMousePosition(event);
 
       if (this.highlightModeActive) {
         if (!this.croppingStarted && event.button === 0) {
@@ -981,16 +1030,25 @@ export default {
           this.underlineModeActive = false;
           this.currentUnderline = null;
         }
-      } else if (this.traceModeActive || this.measureModeActive) {
-        if (!this.croppingStarted && !this.croppedImage) {
-          this.startPoint = { x, y };
-          this.currentSquare = { x, y, width: 0, height: 0 };
-          this.croppingStarted = true;
-        } else if (this.croppingStarted && !this.croppedImage) {
-          this.generateCroppedSvg();
-          this.croppingStarted = false;
-          this.currentSquare = null;
-          this.startPoint = null;
+      }
+      if (this.traceModeActive) {
+        const { x, y } = this.getMousePosition(event);
+        this.startPoint = { x, y };
+        this.currentStroke = {
+          points: [{ x, y }],
+          color: this.generateRandomColor(),
+        };
+      } else if (this.measureModeActive) {
+        const { x, y } = this.getMousePosition(event);
+        if (this.measurePoints.length < 3) {
+          this.measurePoints.push({ x, y });
+          if (this.measurePoints.length === 3) {
+            this.calculatedAngle = this.calculateAngle(
+              this.measurePoints[0],
+              this.measurePoints[1],
+              this.measurePoints[2]
+            );
+          }
         }
       }
     },
@@ -1006,12 +1064,7 @@ export default {
       }
       const { x, y } = this.getMousePosition(event);
 
-      if (
-        this.croppingStarted &&
-        (this.highlightModeActive ||
-          this.traceModeActive ||
-          this.measureModeActive)
-      ) {
+      if (this.croppingStarted && this.highlightModeActive) {
         const { x, y } = this.getMousePosition(event);
 
         this.currentSquare = {
@@ -1026,6 +1079,10 @@ export default {
         this.currentUnderline.width = Math.abs(x - this.startPoint.x);
         this.currentUnderline.endX = x - this.currentUnderline.x; // Relative to the SVG container
         this.currentUnderline.endY = y - this.currentUnderline.y; // Relative to the SVG container
+      } else if (this.traceModeActive && this.currentStroke) {
+        const { x, y } = this.getMousePosition(event);
+        this.currentStroke.points.push({ x, y });
+        this.dynamicTracePath = this.formatPoints(this.currentStroke.points);
       }
     },
     endTrace() {
@@ -1044,6 +1101,12 @@ export default {
         this.croppingStarted = false;
         this.underlineModeActive = false;
         this.currentUnderline = null;
+      }
+
+      if (this.traceModeActive && this.currentStroke) {
+        this.strokes.push(this.currentStroke);
+        this.currentStroke = null;
+        this.dynamicTracePath = "";
       }
     },
 
@@ -1116,6 +1179,24 @@ export default {
       this.draggingCommentIndex = null;
     },
 
+    mounted() {
+      const viewer = this.$refs.viewer;
+      if (viewer) {
+        viewer.addEventListener("mousedown", this.startAnnotating);
+        viewer.addEventListener("mousemove", this.annotateImage);
+        viewer.addEventListener("mouseup", this.endAnnotating);
+      }
+    },
+
+    beforeDestroy() {
+      const viewer = this.$refs.viewer;
+      if (viewer) {
+        viewer.removeEventListener("mousedown", this.startAnnotating);
+        viewer.removeEventListener("mousemove", this.annotateImage);
+        viewer.removeEventListener("mouseup", this.endAnnotating);
+      }
+    },
+
     startAnnotating(event) {
       if (this.measureModeActive) {
         this.startAngleMeasurement(event);
@@ -1123,6 +1204,7 @@ export default {
         this.startDrawing(event);
       }
     },
+
     annotateImage(event) {
       if (this.measureModeActive) {
         this.moveAnglePoint(event);
@@ -1130,6 +1212,7 @@ export default {
         this.dynamicTrace(event);
       }
     },
+
     endAnnotating() {
       if (this.measureModeActive) {
         this.stopAngleDragging();
@@ -1901,7 +1984,32 @@ export default {
   color: #333;
   cursor: pointer;
 }
+.toolbar-item.active {
+  color: #007bff;
+  background-color: #e0f7ff;
+}
 
+.drawing-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none; /* Ensure the SVG layer doesn't block mouse events */
+}
+
+.tool-message {
+  position: fixed;
+  top: 50%; /* Center vertically */
+  left: 50%; /* Center horizontally */
+  transform: translate(-50%, -50%); /* Adjust for exact centering */
+  background-color: #007bff;
+  color: white;
+  padding: 10px 20px;
+  border-radius: 5px;
+  z-index: 1000;
+  font-size: 14px;
+  text-align: center;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Optional: Add a subtle shadow */
+}
 .toolbar-item:hover {
   color: #007bff;
 }
