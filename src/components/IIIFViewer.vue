@@ -48,74 +48,6 @@
 
         <div class="tool-message" v-if="toolMessage">{{ toolMessage }}</div>
 
-        <svg
-          v-if="traceModeActive || measureModeActive"
-          class="drawing-layer"
-          :width="viewerWidth"
-          :height="viewerHeight"
-        >
-          <!-- Render existing traces -->
-          <polyline
-            v-for="(stroke, index) in strokes"
-            :key="'stroke-' + index"
-            :points="formatPoints(stroke.points)"
-            :stroke="stroke.color"
-            stroke-width="2"
-            fill="none"
-          />
-
-          <!-- Render dynamic trace -->
-          <polyline
-            v-if="dynamicTracePath"
-            :points="dynamicTracePath"
-            stroke="red"
-            stroke-width="2"
-            fill="none"
-          />
-
-          <!-- Render angle measurement points -->
-          <circle
-            v-for="(point, index) in measurePoints"
-            :key="'measure-point-' + index"
-            :cx="point.x"
-            :cy="point.y"
-            r="5"
-            fill="red"
-          />
-
-          <!-- Render angle measurement lines -->
-          <line
-            v-if="measurePoints.length >= 2"
-            :x1="measurePoints[0].x"
-            :y1="measurePoints[0].y"
-            :x2="measurePoints[1].x"
-            :y2="measurePoints[1].y"
-            stroke="blue"
-            stroke-width="2"
-          />
-          <line
-            v-if="measurePoints.length === 3"
-            :x1="measurePoints[1].x"
-            :y1="measurePoints[1].y"
-            :x2="measurePoints[2].x"
-            :y2="measurePoints[2].y"
-            stroke="blue"
-            stroke-width="2"
-          />
-
-          <!-- Render angle text -->
-          <text
-            v-if="measurePoints.length === 3"
-            :x="measurePoints[1].x + 10"
-            :y="measurePoints[1].y - 10"
-            font-size="12"
-            fill="black"
-            style="background-color: white; padding: 2px"
-          >
-            {{ calculatedAngle }}°
-          </text>
-        </svg>
-
         <!-- Add the Calculate button -->
         <div
           class="toolbar-item calculate-container"
@@ -260,6 +192,7 @@
       class="pdf-viewer"
       @mousedown="startTrace"
       @mousemove="trace"
+      @mouseup="endTrace"
       ref="viewer"
     >
       <img
@@ -277,7 +210,76 @@
               ? 'crosshair'
               : 'default',
         }"
+        draggable="false"
       />
+
+      <svg
+        v-if="traceModeActive || measureModeActive"
+        class="drawing-layer"
+        :width="viewerWidth"
+        :height="viewerHeight"
+      >
+        <!-- Render existing traces -->
+        <polyline
+          v-for="(stroke, index) in strokes"
+          :key="'stroke-' + index"
+          :points="formatPoints(stroke.points)"
+          :stroke="stroke.color"
+          stroke-width="2"
+          fill="none"
+        />
+
+        <!-- Render dynamic trace -->
+        <polyline
+          v-if="dynamicTracePath"
+          :points="dynamicTracePath"
+          stroke="red"
+          stroke-width="2"
+          fill="none"
+        />
+
+        <!-- Render angle measurement points -->
+        <circle
+          v-for="(point, index) in measurePoints"
+          :key="'measure-point-' + index"
+          :cx="point.x"
+          :cy="point.y"
+          r="5"
+          fill="red"
+        />
+
+        <!-- Render angle measurement lines -->
+        <line
+          v-if="measurePoints.length >= 2"
+          :x1="measurePoints[0].x"
+          :y1="measurePoints[0].y"
+          :x2="measurePoints[1].x"
+          :y2="measurePoints[1].y"
+          stroke="blue"
+          stroke-width="2"
+        />
+        <line
+          v-if="measurePoints.length === 3"
+          :x1="measurePoints[1].x"
+          :y1="measurePoints[1].y"
+          :x2="measurePoints[2].x"
+          :y2="measurePoints[2].y"
+          stroke="blue"
+          stroke-width="2"
+        />
+
+        <!-- Render angle text -->
+        <text
+          v-if="measurePoints.length === 3"
+          :x="measurePoints[1].x + 10"
+          :y="measurePoints[1].y - 10"
+          font-size="12"
+          fill="black"
+          style="background-color: white; padding: 2px"
+        >
+          {{ calculatedAngle }}°
+        </text>
+      </svg>
 
       <!-- Render dynamic length measurement rectangle -->
       <div
@@ -664,6 +666,15 @@ export default {
     };
   },
   computed: {
+    viewerWidth() {
+      const viewer = this.$refs.viewer;
+      return viewer ? viewer.clientWidth : 0;
+    },
+    viewerHeight() {
+      const viewer = this.$refs.viewer;
+      return viewer ? viewer.clientHeight : 0;
+    },
+
     currentPageLengthMeasurements() {
       // Combine all measurements for the current page from all labels
       const measurements = [];
@@ -980,11 +991,12 @@ export default {
         !this.highlightModeActive &&
         !this.underlineModeActive &&
         !this.traceModeActive &&
-        this.measureModeActive
+        !this.measureModeActive
       ) {
-        return; // Exit the function early
+        return; // Exit the function early if no relevant tool is active
       }
 
+      // Highlight Mode
       if (this.highlightModeActive) {
         if (!this.croppingStarted && event.button === 0) {
           // Start cropping
@@ -1002,7 +1014,10 @@ export default {
           this.highlightModeActive = false;
           this.currentSquare = null;
         }
-      } else if (this.underlineModeActive) {
+      }
+
+      // Underline Mode
+      else if (this.underlineModeActive) {
         if (!this.croppingStarted && event.button === 0) {
           console.log("Underline mode started");
           // Start underlining (underline mode)
@@ -1031,17 +1046,33 @@ export default {
           this.currentUnderline = null;
         }
       }
+
+      // Trace Mode
       if (this.traceModeActive) {
+        // Start a new trace
         const { x, y } = this.getMousePosition(event);
         this.startPoint = { x, y };
         this.currentStroke = {
           points: [{ x, y }],
           color: this.generateRandomColor(),
         };
+        this.dynamicTracePath = `M${x},${y}`;
       } else if (this.measureModeActive) {
+        // Start or continue angle measurement
         const { x, y } = this.getMousePosition(event);
+
+        // Check if we're dragging an existing point
+        const nearestPointIndex = this.findNearestPoint(x, y, 10); // 10px threshold
+        if (nearestPointIndex !== -1) {
+          this.draggingPoint = nearestPointIndex;
+          return; // Exit early if dragging an existing point
+        }
+
+        // Add a new point if we're not dragging
         if (this.measurePoints.length < 3) {
           this.measurePoints.push({ x, y });
+
+          // Calculate the angle if we have 3 points
           if (this.measurePoints.length === 3) {
             this.calculatedAngle = this.calculateAngle(
               this.measurePoints[0],
@@ -1049,6 +1080,8 @@ export default {
               this.measurePoints[2]
             );
           }
+        } else {
+          alert("Three points already selected. Drag to adjust.");
         }
       }
     },
@@ -1058,31 +1091,51 @@ export default {
         !this.highlightModeActive &&
         !this.underlineModeActive &&
         !this.traceModeActive &&
-        this.measureModeActive
+        !this.measureModeActive
       ) {
-        return; // Exit the function early
+        return; // Exit the function early if no relevant tool is active
       }
+
       const { x, y } = this.getMousePosition(event);
 
-      if (this.croppingStarted && this.highlightModeActive) {
-        const { x, y } = this.getMousePosition(event);
-
+      // Highlight Mode
+      if (this.highlightModeActive && this.croppingStarted) {
         this.currentSquare = {
           x: Math.min(x, this.startPoint.x),
           y: Math.min(y, this.startPoint.y),
           width: Math.abs(x - this.startPoint.x),
           height: Math.abs(y - this.startPoint.y),
         };
-      } else if (this.underlineModeActive && this.currentUnderline) {
+      }
+
+      // Underline Mode
+      else if (this.underlineModeActive && this.currentUnderline) {
         console.log("Underline mode herererer");
         console.log(this.currentUnderline);
         this.currentUnderline.width = Math.abs(x - this.startPoint.x);
         this.currentUnderline.endX = x - this.currentUnderline.x; // Relative to the SVG container
         this.currentUnderline.endY = y - this.currentUnderline.y; // Relative to the SVG container
-      } else if (this.traceModeActive && this.currentStroke) {
+      }
+
+      // Trace Mode
+      else if (this.traceModeActive && this.currentStroke) {
+        // Continue drawing the trace
         const { x, y } = this.getMousePosition(event);
         this.currentStroke.points.push({ x, y });
         this.dynamicTracePath = this.formatPoints(this.currentStroke.points);
+      } else if (this.measureModeActive && this.draggingPoint !== -1) {
+        // Adjust the position of a draggable point
+        const { x, y } = this.getMousePosition(event);
+        this.measurePoints[this.draggingPoint] = { x, y };
+
+        // Recalculate the angle if all 3 points are present
+        if (this.measurePoints.length === 3) {
+          this.calculatedAngle = this.calculateAngle(
+            this.measurePoints[0],
+            this.measurePoints[1],
+            this.measurePoints[2]
+          );
+        }
       }
     },
     endTrace() {
@@ -1104,9 +1157,13 @@ export default {
       }
 
       if (this.traceModeActive && this.currentStroke) {
+        // Save the current trace and reset
         this.strokes.push(this.currentStroke);
         this.currentStroke = null;
         this.dynamicTracePath = "";
+      } else if (this.measureModeActive) {
+        // Stop dragging a point
+        this.draggingPoint = -1;
       }
     },
 
@@ -1177,24 +1234,6 @@ export default {
     // Stop dragging
     stopDraggingComment() {
       this.draggingCommentIndex = null;
-    },
-
-    mounted() {
-      const viewer = this.$refs.viewer;
-      if (viewer) {
-        viewer.addEventListener("mousedown", this.startAnnotating);
-        viewer.addEventListener("mousemove", this.annotateImage);
-        viewer.addEventListener("mouseup", this.endAnnotating);
-      }
-    },
-
-    beforeDestroy() {
-      const viewer = this.$refs.viewer;
-      if (viewer) {
-        viewer.removeEventListener("mousedown", this.startAnnotating);
-        viewer.removeEventListener("mousemove", this.annotateImage);
-        viewer.removeEventListener("mouseup", this.endAnnotating);
-      }
     },
 
     startAnnotating(event) {
