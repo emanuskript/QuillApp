@@ -221,7 +221,7 @@
       >
         <!-- Render existing traces -->
         <polyline
-          v-for="(stroke, index) in strokes"
+          v-for="(stroke, index) in currentPageStrokes"
           :key="'stroke-' + index"
           :points="formatPoints(stroke.points)"
           :stroke="stroke.color"
@@ -238,7 +238,6 @@
           fill="none"
         />
 
-        <!-- Render angle measurement points -->
         <circle
           v-for="(point, index) in measurePoints"
           :key="'measure-point-' + index"
@@ -280,7 +279,6 @@
           {{ calculatedAngle }}°
         </text>
       </svg>
-
       <!-- Render dynamic length measurement rectangle -->
       <div
         v-if="isMeasuring && currentSquare"
@@ -435,7 +433,7 @@
 
       <!-- Render dynamic underline -->
       <div
-        v-if="currentImage && underlineModeActive && currentUnderline"
+        v-if="underlineModeActive && currentUnderline"
         class="underline-line"
         :style="{
           position: 'absolute',
@@ -513,70 +511,6 @@
         >
           <div v-html="croppedSvg"></div>
         </foreignObject>
-
-        <!-- Render existing strokes -->
-        <polyline
-          v-for="(stroke, index) in strokes"
-          :key="'stroke-' + index"
-          :points="formatPoints(stroke.points)"
-          :stroke="stroke.color"
-          stroke-width="2"
-          fill="none"
-        ></polyline>
-
-        <!-- Render dynamic path while drawing -->
-        <polyline
-          v-if="dynamicTracePath"
-          :points="dynamicTracePath"
-          stroke="red"
-          stroke-width="2"
-          fill="none"
-        ></polyline>
-
-        <!-- Render draggable points for angle measurement -->
-        <circle
-          v-for="(point, index) in measurePoints"
-          :key="'measure-point-' + index"
-          :cx="point.x"
-          :cy="point.y"
-          r="8"
-          fill="red"
-          style="cursor: pointer"
-          @mousedown="startDraggingPoint(index, $event)"
-        ></circle>
-
-        <!-- Draw lines between points -->
-        <line
-          v-if="measurePoints.length >= 2"
-          :x1="measurePoints[0].x"
-          :y1="measurePoints[0].y"
-          :x2="measurePoints[1].x"
-          :y2="measurePoints[1].y"
-          stroke="blue"
-          stroke-width="2"
-        ></line>
-
-        <line
-          v-if="measurePoints.length === 3"
-          :x1="measurePoints[1].x"
-          :y1="measurePoints[1].y"
-          :x2="measurePoints[2].x"
-          :y2="measurePoints[2].y"
-          stroke="blue"
-          stroke-width="2"
-        ></line>
-
-        <!-- Angle Display -->
-        <text
-          v-if="measurePoints.length === 3"
-          :x="measurePoints[1].x + 20"
-          :y="measurePoints[1].y - 10"
-          font-size="16"
-          fill="black"
-          style="background-color: white; padding: 2px"
-        >
-          {{ calculatedAngle }}°
-        </text>
       </svg>
     </div>
   </div>
@@ -595,6 +529,7 @@ export default {
     return {
       showStatistics: false,
       images: [],
+      isFirstClick: true,
       horizontalStatistics: {}, // Stores horizontal statistics
       verticalStatistics: {},
       annotationsByPage: [],
@@ -670,6 +605,13 @@ export default {
       const viewer = this.$refs.viewer;
       return viewer ? viewer.clientWidth : 0;
     },
+    currentPageAngleMeasurements() {
+      return (
+        this.annotationsByPage[this.currentPage]?.filter(
+          (annotation) => annotation.type === "measure"
+        ) || []
+      );
+    },
     viewerHeight() {
       const viewer = this.$refs.viewer;
       return viewer ? viewer.clientHeight : 0;
@@ -701,6 +643,14 @@ export default {
         ) || []
       );
     },
+    currentPageStrokes() {
+      return (
+        this.annotationsByPage[this.currentPage]?.filter(
+          (annotation) => annotation.type === "trace"
+        ) || []
+      );
+    },
+
     currentPageComments() {
       return this.comments[this.currentPage] || [];
     },
@@ -942,15 +892,21 @@ export default {
       }
       this.currentTool = tool;
       if (tool === "trace") {
-        this.traceModeActive = true;
+        this.traceModeActive = !this.traceModeActive; // Toggle trace mode
         this.measureModeActive = false;
-        this.croppedImage = false; // Reset croppedImage when Trace is selected
-        this.showToolMessage("To deactivate tracing, reclick the button");
+        this.showToolMessage(
+          this.traceModeActive
+            ? "Trace mode active. Click again to deactivate."
+            : "Trace mode deactivated."
+        );
       } else if (tool === "measure") {
-        this.measureModeActive = true;
+        this.measureModeActive = !this.measureModeActive; // Toggle measure mode
         this.traceModeActive = false;
-        this.croppedImage = false; // Reset croppedImage when Measure is selected
-        this.showToolMessage("To deactivate measuring, reclick the button");
+        this.showToolMessage(
+          this.measureModeActive
+            ? "Angle measurement active. Click again to deactivate."
+            : "Angle measurement deactivated."
+        );
       } else if (tool === "highlight") {
         this.highlightModeActive = true;
       } else if (tool === "underline") {
@@ -997,53 +953,49 @@ export default {
       }
 
       // Highlight Mode
-      if (this.highlightModeActive) {
-        if (!this.croppingStarted && event.button === 0) {
-          // Start cropping
-          const { x, y } = this.getMousePosition(event);
-          this.startPoint = { x, y };
-          this.currentSquare = { x, y, width: 0, height: 0 };
-          this.croppingStarted = true;
-        } else {
-          // Finish cropping and add the highlight annotation
-          this.annotationsByPage[this.currentPage].push({
-            type: "highlight",
-            ...this.currentSquare,
-          });
-          this.croppingStarted = false;
-          this.highlightModeActive = false;
-          this.currentSquare = null;
-        }
-      }
+      if (this.highlightModeActive || this.underlineModeActive) {
+        if (this.isFirstClick) {
+          // First click: Start the annotation
+          if (this.highlightModeActive) {
+            const { x, y } = this.getMousePosition(event);
+            this.startPoint = { x, y };
+            this.currentSquare = { x, y, width: 0, height: 0 };
+          }
+          if (this.underlineModeActive) {
+            const { x, y } = this.getMousePosition(event);
 
-      // Underline Mode
-      else if (this.underlineModeActive) {
-        if (!this.croppingStarted && event.button === 0) {
-          console.log("Underline mode started");
-          // Start underlining (underline mode)
-          const { x, y } = this.getMousePosition(event);
-          this.startPoint = { x, y };
-          this.currentUnderline = {
-            type: "underline",
-            x: x,
-            y: y,
-            width: 0,
-            height: 2,
-            startX: 0,
-            startY: 0,
-            endX: 0,
-            endY: 0,
-          };
-          console.log(this.currentUnderline);
-          this.croppingStarted = true;
-          this.traceModeActive = false;
-          this.measureModeActive = false;
+            if (!this.currentUnderline) {
+              // First click: Initialize the underline
+              this.startPoint = { x, y };
+              this.currentUnderline = {
+                x: x,
+                y: y,
+                width: 0,
+                height: 2, // Height of the underline
+              };
+            }
+
+            console.log(this.currentUnderline);
+          }
+          this.isFirstClick = false; // Next click will finalize the annotation
         } else {
-          console.log(this.currentUnderline);
-          this.annotationsByPage[this.currentPage].push(this.currentUnderline);
-          this.croppingStarted = false;
+          // Second click: Finalize the annotation
+          if (this.highlightModeActive) {
+            this.annotationsByPage[this.currentPage].push({
+              type: "highlight",
+              ...this.currentSquare,
+            });
+            this.currentSquare = null;
+          } else if (this.underlineModeActive) {
+            this.annotationsByPage[this.currentPage].push({
+              type: "underline",
+              ...this.currentUnderline,
+            });
+            this.currentUnderline = null;
+          }
+          this.isFirstClick = true; // Reset for the next annotation
+          this.highlightModeActive = false;
           this.underlineModeActive = false;
-          this.currentUnderline = null;
         }
       }
 
@@ -1096,25 +1048,19 @@ export default {
         return; // Exit the function early if no relevant tool is active
       }
 
-      const { x, y } = this.getMousePosition(event);
-
       // Highlight Mode
-      if (this.highlightModeActive && this.croppingStarted) {
-        this.currentSquare = {
-          x: Math.min(x, this.startPoint.x),
-          y: Math.min(y, this.startPoint.y),
-          width: Math.abs(x - this.startPoint.x),
-          height: Math.abs(y - this.startPoint.y),
-        };
-      }
-
-      // Underline Mode
-      else if (this.underlineModeActive && this.currentUnderline) {
-        console.log("Underline mode herererer");
-        console.log(this.currentUnderline);
+      if (this.highlightModeActive && this.currentSquare) {
+        // Update the highlight rectangle dimensions as the mouse moves
+        const { x, y } = this.getMousePosition(event);
+        this.currentSquare.width = Math.abs(x - this.startPoint.x);
+        this.currentSquare.height = Math.abs(y - this.startPoint.y);
+        this.currentSquare.x = Math.min(x, this.startPoint.x);
+        this.currentSquare.y = Math.min(y, this.startPoint.y);
+      } else if (this.underlineModeActive && this.currentUnderline) {
+        // Update the underline width as the mouse moves
+        const { x } = this.getMousePosition(event);
         this.currentUnderline.width = Math.abs(x - this.startPoint.x);
-        this.currentUnderline.endX = x - this.currentUnderline.x; // Relative to the SVG container
-        this.currentUnderline.endY = y - this.currentUnderline.y; // Relative to the SVG container
+        this.currentUnderline.x = Math.min(x, this.startPoint.x);
       }
 
       // Trace Mode
@@ -1139,30 +1085,22 @@ export default {
       }
     },
     endTrace() {
-      if (this.highlightModeActive && this.croppingStarted) {
-        this.annotations.push({
-          type: "highlight",
-          ...this.currentSquare,
-        });
-        this.croppingStarted = false;
-        this.highlightModeActive = false;
-        this.currentSquare = null;
-      } else if (this.underlineModeActive && this.currentUnderline != null) {
-        console.log(this.currentUnderline);
-
-        this.annotations.push(this.currentUnderline);
-        this.croppingStarted = false;
-        this.underlineModeActive = false;
-        this.currentUnderline = null;
-      }
-
       if (this.traceModeActive && this.currentStroke) {
         // Save the current trace and reset
-        this.strokes.push(this.currentStroke);
+        this.annotationsByPage[this.currentPage].push({
+          type: "trace",
+          points: this.currentStroke.points,
+          color: this.currentStroke.color,
+        });
         this.currentStroke = null;
         this.dynamicTracePath = "";
       } else if (this.measureModeActive) {
-        // Stop dragging a point
+        this.annotationsByPage[this.currentPage].push({
+          type: "measure",
+          points: this.measurePoints,
+          angle: this.calculatedAngle,
+        });
+
         this.draggingPoint = -1;
       }
     },
@@ -1570,6 +1508,8 @@ export default {
         intercolumnSpaces: {},
       };
       this.strokes = [];
+      this.measurePoints = []; // Clear angle measurement points
+      this.calculatedAngle = 0; // Reset angle
     },
 
     showLengthPopup(type) {
