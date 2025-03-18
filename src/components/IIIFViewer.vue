@@ -214,7 +214,7 @@
       />
 
       <svg
-        v-if="traceModeActive || measureModeActive"
+        v-if="showTraces"
         class="drawing-layer"
         :width="viewerWidth"
         :height="viewerHeight"
@@ -527,6 +527,7 @@ export default {
   },
   data() {
     return {
+      showTraces: false,
       showStatistics: false,
       images: [],
       isFirstClick: true,
@@ -893,6 +894,7 @@ export default {
       this.currentTool = tool;
       if (tool === "trace") {
         this.traceModeActive = !this.traceModeActive; // Toggle trace mode
+        this.showTraces = true;
         this.measureModeActive = false;
         this.showToolMessage(
           this.traceModeActive
@@ -901,6 +903,7 @@ export default {
         );
       } else if (tool === "measure") {
         this.measureModeActive = !this.measureModeActive; // Toggle measure mode
+        this.showTraces = true;
         this.traceModeActive = false;
         this.showToolMessage(
           this.measureModeActive
