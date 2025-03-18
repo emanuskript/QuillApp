@@ -73,6 +73,50 @@
         </div>
       </div>
     </div>
+
+    <!-- Trace Pen Selection Popup -->
+    <div v-if="showPenSelectionPopup" class="pen-selection-popup">
+      <div class="pen-selection-content">
+        <h3 style="margin-top: 20px">Select a Pen</h3>
+        <div class="pen-options">
+          <div
+            v-for="angle in penAngles"
+            :key="angle"
+            class="pen-option"
+            @click="selectPen(angle)"
+            :class="{ selected: selectedPenAngle === angle }"
+          >
+            <div
+              class="pen-preview"
+              :style="{ transform: `rotate(${-angle}deg)` }"
+            >
+              <!-- Simulate the pen nib -->
+              <div class="pen-nib"></div>
+            </div>
+            <span class="pen-angle-text">{{ angle }}°</span>
+          </div>
+        </div>
+        <div class="test-box">
+          <h4>Test Your Pen</h4>
+          <div class="test-area" @mousedown="startTrace" @mousemove="trace">
+            <svg class="test-svg">
+              <polyline
+                v-if="testTracePath"
+                :points="testTracePath"
+                stroke="black"
+                :stroke-width="penWidth"
+                :stroke-height="penHeight"
+                fill="none"
+              />
+            </svg>
+          </div>
+        </div>
+        <div class="pen-selection-actions">
+          <button @click="confirmPenSelection">Confirm</button>
+          <button @click="cancelPenSelection">Cancel</button>
+        </div>
+      </div>
+    </div>
     <!-- Horizontal Bands Popup -->
     <div v-if="showHorizontalPopup" class="length-popup">
       <div class="length-popup-content">
@@ -225,7 +269,8 @@
           :key="'stroke-' + index"
           :points="formatPoints(stroke.points)"
           :stroke="stroke.color"
-          stroke-width="2"
+          :stroke-width="stroke.penWidth"
+          :stroke-height="stroke.penHeight"
           fill="none"
         />
 
@@ -527,8 +572,14 @@ export default {
   },
   data() {
     return {
+      penWidth: 3, // Default pen width
+      penHeight: 6, // Default pen height
       showTraces: false,
       showStatistics: false,
+      showPenSelectionPopup: false,
+      penAngles: [0, 25, 30, 50, 80], // Available pen angles
+      selectedPenAngle: null, // Currently selected pen angle
+      testTracePath: "", // Path for testing the pen
       images: [],
       isFirstClick: true,
       horizontalStatistics: {}, // Stores horizontal statistics
@@ -769,6 +820,96 @@ export default {
       return realLength * this.scalingFactor; // Relative length
     },
 
+    // Show the pen selection popup
+    showPenSelection() {
+      this.showPenSelectionPopup = true;
+      this.selectedPenAngle = null;
+      this.testTracePath = "";
+    },
+
+    // Select a pen angle
+    selectPen(angle) {
+      this.selectedPenAngle = angle;
+
+      switch (angle) {
+        case 25:
+          this.penWidth = 3;
+          this.penHeight = 6; // Wider on one axis
+          break;
+        case 30:
+          this.penWidth = 4;
+          this.penHeight = 7;
+          break;
+        case 50:
+          this.penWidth = 5;
+          this.penHeight = 8;
+          break;
+        case 80:
+          this.penWidth = 6;
+          this.penHeight = 10;
+          break;
+        case 0:
+          this.penWidth = 2;
+          this.penHeight = 2; // Round dot
+          break;
+        default:
+          this.penWidth = 3;
+          this.penHeight = 6;
+      }
+    },
+
+    // Start testing the pen in the test area
+    startTestTrace(event) {
+      const { x, y } = this.getTestBoxMousePosition(event);
+      this.testTracePath = `M${x},${y}`;
+      this.isDrawingTest = true; // Flag to indicate drawing is active
+    },
+
+    // Continue testing the pen in the test area
+    testTrace(event) {
+      if (!this.isDrawingTest) return; // Only draw if the mouse is pressed
+      const { x, y } = this.getTestBoxMousePosition(event);
+      this.testTracePath += ` L${x},${y}`;
+    },
+
+    // End testing the pen in the test area
+    endTestTrace() {
+      this.isDrawingTest = false; // Stop drawing
+    },
+
+    getTestBoxMousePosition(event) {
+      const testArea = event.target.closest(".test-area");
+      if (!testArea) return { x: 0, y: 0 };
+      const rect = testArea.getBoundingClientRect();
+      return {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      };
+    },
+
+    // Confirm the pen selection and activate trace mode
+    confirmPenSelection() {
+      if (
+        this.selectedPenAngle === null ||
+        this.selectedPenAngle === undefined
+      ) {
+        alert("Please select a pen angle before confirming.");
+        return;
+      }
+      this.showPenSelectionPopup = false;
+      this.traceModeActive = true; // Activate trace mode
+      this.showToolMessage(
+        `Trace mode activated with ${this.selectedPenAngle}° pen.`
+      );
+    },
+
+    // Cancel the pen selection
+    cancelPenSelection() {
+      this.showPenSelectionPopup = false;
+      this.selectedPenAngle = null;
+      this.testTracePath = "";
+    },
+
     async generateCroppedSvg() {
       if (!this.currentSquare) {
         console.error("Cannot generate cropped SVG. currentSquare is null.");
@@ -894,6 +1035,9 @@ export default {
       this.currentTool = tool;
       if (tool === "trace") {
         this.traceModeActive = !this.traceModeActive; // Toggle trace mode
+        if (this.traceModeActive) {
+          this.showPenSelection();
+        }
         this.showTraces = true;
         this.measureModeActive = false;
         this.showToolMessage(
@@ -1010,6 +1154,8 @@ export default {
         this.currentStroke = {
           points: [{ x, y }],
           color: this.generateRandomColor(),
+          penWidth: this.penWidth, // Use the selected pen width
+          penHeight: this.penHeight, // Use the selected pen height
         };
         this.dynamicTracePath = `M${x},${y}`;
       } else if (this.measureModeActive) {
@@ -1094,13 +1240,15 @@ export default {
           type: "trace",
           points: this.currentStroke.points,
           color: this.currentStroke.color,
+          penWidth: this.currentStroke.penWidth, // Save pen width
+          penHeight: this.currentStroke.penHeight, // Save pen height
         });
         this.currentStroke = null;
         this.dynamicTracePath = "";
       } else if (this.measureModeActive) {
         this.annotationsByPage[this.currentPage].push({
           type: "measure",
-          points: this.measurePoints,
+          points: [...this.measurePoints], // Store a copy of the points
           angle: this.calculatedAngle,
         });
 
@@ -2355,5 +2503,87 @@ button:hover {
 
 .statistics-popup-content button:hover {
   background-color: #0056b3;
+}
+
+.pen-selection-popup {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+}
+
+.pen-selection-content {
+  background-color: white;
+  padding: 20px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  text-align: center;
+  width: 400px;
+}
+
+.pen-options {
+  display: flex;
+  justify-content: space-between; /* Align items from left to right */
+  margin-bottom: 20px;
+}
+
+.pen-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+}
+
+.pen-option.selected {
+  border: 2px solid #007bff;
+  border-radius: 5px;
+  padding: 5px;
+}
+
+.pen-preview {
+  width: 30px;
+  height: 10px;
+  background-color: grey; /* Pen color */
+  margin-bottom: 20px; /* Add margin between the pen and the angle text */
+  transform-origin: left center; /* Rotate around the left edge */
+  position: relative;
+}
+
+.pen-nib {
+  width: 10px;
+  height: 10px;
+  background-color: black;
+  border-radius: 50%; /* Make the nib circular */
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.pen-option:hover {
+  background-color: #f0f8ff; /* Light blue background */
+  border-color: #007bff; /* Blue border */
+}
+.test-box {
+  margin-top: 20px;
+}
+
+.test-area {
+  width: 100%;
+  height: 100px;
+  border: 1px solid #ccc;
+  background-color: white;
+  position: relative;
+}
+
+.test-svg {
+  width: 100%;
+  height: 100%;
 }
 </style>
