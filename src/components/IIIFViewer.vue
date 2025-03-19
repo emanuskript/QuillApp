@@ -98,11 +98,17 @@
         </div>
         <div class="test-box">
           <h4>Test Your Pen</h4>
-          <div class="test-area" @mousedown="startTrace" @mousemove="trace">
+          <div
+            class="test-area"
+            @mousedown="startTestTrace"
+            @mousemove="testTrace"
+            @mouseup="endTestTrace"
+            @mouseleave="endTestTrace"
+          >
             <svg class="test-svg">
               <polyline
-                v-if="testTracePath"
-                :points="testTracePath"
+                v-if="testTracePath.length > 0"
+                :points="formatPoints(testTracePath)"
                 stroke="black"
                 :stroke-width="penWidth"
                 :stroke-height="penHeight"
@@ -861,7 +867,7 @@ export default {
     // Start testing the pen in the test area
     startTestTrace(event) {
       const { x, y } = this.getTestBoxMousePosition(event);
-      this.testTracePath = `M${x},${y}`;
+      this.testTracePath = [{ x, y }];
       this.isDrawingTest = true; // Flag to indicate drawing is active
     },
 
@@ -869,7 +875,7 @@ export default {
     testTrace(event) {
       if (!this.isDrawingTest) return; // Only draw if the mouse is pressed
       const { x, y } = this.getTestBoxMousePosition(event);
-      this.testTracePath += ` L${x},${y}`;
+      this.testTracePath.push({ x, y });
     },
 
     // End testing the pen in the test area
@@ -898,6 +904,7 @@ export default {
       }
       this.showPenSelectionPopup = false;
       this.traceModeActive = true; // Activate trace mode
+      this.testTracePath = ""; // Clear the test trace
       this.showToolMessage(
         `Trace mode activated with ${this.selectedPenAngle}° pen.`
       );
@@ -2585,5 +2592,7 @@ button:hover {
 .test-svg {
   width: 100%;
   height: 100%;
+  z-index: 10000;
+  pointer-events: none;
 }
 </style>
