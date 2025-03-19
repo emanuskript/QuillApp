@@ -279,6 +279,46 @@
           :stroke-height="stroke.penHeight"
           fill="none"
         />
+        <!-- Render existing angles -->
+        <g
+          v-for="(annotation, index) in annotationsByPage[currentPage]"
+          :key="'angle-' + index"
+        >
+          <line
+            v-if="
+              annotation.type === 'measure' && annotation.points.length >= 2
+            "
+            :x1="annotation.points[0].x"
+            :y1="annotation.points[0].y"
+            :x2="annotation.points[1].x"
+            :y2="annotation.points[1].y"
+            stroke="blue"
+            stroke-width="2"
+          />
+          <line
+            v-if="
+              annotation.type === 'measure' && annotation.points.length === 3
+            "
+            :x1="annotation.points[1].x"
+            :y1="annotation.points[1].y"
+            :x2="annotation.points[2].x"
+            :y2="annotation.points[2].y"
+            stroke="blue"
+            stroke-width="2"
+          />
+          <text
+            v-if="
+              annotation.type === 'measure' && annotation.points.length === 3
+            "
+            :x="annotation.points[1].x + 10"
+            :y="annotation.points[1].y - 10"
+            font-size="12"
+            fill="darkblue"
+            style="background-color: black; padding: 10px"
+          >
+            {{ annotation.angle }}°
+          </text>
+        </g>
 
         <!-- Render dynamic trace -->
         <polyline
@@ -296,39 +336,8 @@
           :cy="point.y"
           r="5"
           fill="red"
+          @mousedown.stop="startDraggingPoint(index, $event)"
         />
-
-        <!-- Render angle measurement lines -->
-        <line
-          v-if="measurePoints.length >= 2"
-          :x1="measurePoints[0].x"
-          :y1="measurePoints[0].y"
-          :x2="measurePoints[1].x"
-          :y2="measurePoints[1].y"
-          stroke="blue"
-          stroke-width="2"
-        />
-        <line
-          v-if="measurePoints.length === 3"
-          :x1="measurePoints[1].x"
-          :y1="measurePoints[1].y"
-          :x2="measurePoints[2].x"
-          :y2="measurePoints[2].y"
-          stroke="blue"
-          stroke-width="2"
-        />
-
-        <!-- Render angle text -->
-        <text
-          v-if="measurePoints.length === 3"
-          :x="measurePoints[1].x + 10"
-          :y="measurePoints[1].y - 10"
-          font-size="12"
-          fill="black"
-          style="background-color: white; padding: 2px"
-        >
-          {{ calculatedAngle }}°
-        </text>
       </svg>
       <!-- Render dynamic length measurement rectangle -->
       <div
@@ -1055,6 +1064,8 @@ export default {
       } else if (tool === "measure") {
         this.measureModeActive = !this.measureModeActive; // Toggle measure mode
         this.showTraces = true;
+        this.measurePoints = []; // Clear existing points
+        this.draggingPoint = -1; // Reset dragging state
         this.traceModeActive = false;
         this.showToolMessage(
           this.measureModeActive
@@ -1175,21 +1186,32 @@ export default {
           this.draggingPoint = nearestPointIndex;
           return; // Exit early if dragging an existing point
         }
+        // Prevent adding more than 3 points
+        if (this.measurePoints.length >= 3) {
+          this.showToolMessage(
+            "Three points already created. Drag points to adjust."
+          );
+          return;
+        }
 
-        // Add a new point if we're not dragging
-        if (this.measurePoints.length < 3) {
-          this.measurePoints.push({ x, y });
+        // Add a new point
+        this.measurePoints.push({ x, y });
 
-          // Calculate the angle if we have 3 points
-          if (this.measurePoints.length === 3) {
-            this.calculatedAngle = this.calculateAngle(
-              this.measurePoints[0],
-              this.measurePoints[1],
-              this.measurePoints[2]
-            );
-          }
-        } else {
-          alert("Three points already selected. Drag to adjust.");
+        // Calculate the angle if we have 3 points
+        if (this.measurePoints.length === 3) {
+          this.calculatedAngle = this.calculateAngle(
+            this.measurePoints[0],
+            this.measurePoints[1],
+            this.measurePoints[2]
+          );
+
+          // Save the angle to annotations
+          this.annotationsByPage[this.currentPage].push({
+            type: "measure",
+            points: [...this.measurePoints], // Save a copy of the points
+            angle: this.calculatedAngle,
+          });
+          this.showToolMessage("Angle created. Drag points to adjust.");
         }
       }
     },
@@ -1237,6 +1259,15 @@ export default {
             this.measurePoints[1],
             this.measurePoints[2]
           );
+
+          // Update the saved angle in annotations
+          const currentAngle = this.annotationsByPage[this.currentPage].find(
+            (annotation) => annotation.type === "measure"
+          );
+          if (currentAngle) {
+            currentAngle.points = [...this.measurePoints];
+            currentAngle.angle = this.calculatedAngle;
+          }
         }
       }
     },
@@ -1455,7 +1486,13 @@ export default {
       }
     },
     findNearestPoint(x, y, threshold = 10) {
-      return this.measurePoints.findIndex(
+      const currentAngle = this.annotationsByPage[this.currentPage].find(
+        (annotation) => annotation.type === "measure"
+      );
+
+      if (!currentAngle) return -1;
+
+      return currentAngle.points.findIndex(
         (point) =>
           Math.abs(point.x - x) < threshold && Math.abs(point.y - y) < threshold
       );
@@ -1651,6 +1688,7 @@ export default {
     },
     startDraggingPoint(index, event) {
       event.preventDefault();
+      event.stopPropagation();
       this.draggingPoint = index;
     },
     clearAnnotations() {
@@ -2130,7 +2168,6 @@ export default {
   position: absolute;
   top: 0;
   left: 0;
-  pointer-events: none; /* Ensure the SVG layer doesn't block mouse events */
 }
 
 .tool-message {
