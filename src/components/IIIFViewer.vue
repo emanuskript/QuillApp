@@ -54,13 +54,17 @@
           @click.stop="toggleCalculateDropdown"
         >
           <i class="fa-solid fa-calculator"></i>
-          <span>Calculate</span>
+          <span>Generate</span>
+          <span>Statistics</span>
           <!-- Dropdown Menu -->
           <div v-if="showCalculateDropdown" class="calculate-dropdown">
-            <div @click.stop="calculateCurrentPage">Calculate Current Page</div>
-            <div @click.stop="calculateEntireDocument">
-              Calculate Entire Document
+            <div @click.stop="calculateCurrentPage">
+              Lengths Measurements (Current Page)
             </div>
+            <div @click.stop="calculateEntireDocument">
+              Lengths Measurements (Full Document)
+            </div>
+            <div @click.stop="calculateAngleStatistics">Angle Measurements</div>
           </div>
         </div>
         <div class="toolbar-item" @click="saveAnnotations">
@@ -123,6 +127,36 @@
         </div>
       </div>
     </div>
+    <!-- Angle Statistics Popup -->
+    <div v-if="showAngleStatistics" class="statistics-popup">
+      <div class="statistics-popup-content">
+        <h3>Angle Statistics</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Average</th>
+              <th>Standard Deviation</th>
+              <th>Mode</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{{ angleStatistics.average.toFixed(2) }}</td>
+              <td>{{ angleStatistics.standardDeviation.toFixed(2) }}</td>
+              <td>
+                {{
+                  typeof angleStatistics.mode === "number"
+                    ? angleStatistics.mode.toFixed(2)
+                    : angleStatistics.mode
+                }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <button @click="closeAngleStatisticsPopup">Close</button>
+      </div>
+    </div>
+
     <!-- Horizontal Bands Popup -->
     <div v-if="showHorizontalPopup" class="length-popup">
       <div class="length-popup-content">
@@ -279,6 +313,16 @@
           :stroke-height="stroke.penHeight"
           fill="none"
         />
+
+        <circle
+          v-for="(point, index) in measurePoints"
+          :key="'measure-point-' + index"
+          :cx="point.x"
+          :cy="point.y"
+          r="5"
+          fill="red"
+          @mousedown.stop="startDraggingPoint(index, $event)"
+        />
         <!-- Render existing angles -->
         <g
           v-for="(annotation, index) in annotationsByPage[currentPage]"
@@ -321,7 +365,7 @@
         </g>
 
         <!-- Render dynamic trace -->
-        <polyline
+        <!-- <polyline
           v-if="dynamicTracePath"
           :points="dynamicTracePath"
           stroke="red"
@@ -329,15 +373,7 @@
           fill="none"
         />
 
-        <circle
-          v-for="(point, index) in measurePoints"
-          :key="'measure-point-' + index"
-          :cx="point.x"
-          :cy="point.y"
-          r="5"
-          fill="red"
-          @mousedown.stop="startDraggingPoint(index, $event)"
-        />
+ -->
       </svg>
       <!-- Render dynamic length measurement rectangle -->
       <div
@@ -591,11 +627,15 @@ export default {
       penHeight: 6, // Default pen height
       showTraces: false,
       showStatistics: false,
+      showAngleStatistics: false,
+      isCreatingAngle: false, // Track if a new angle is being created
+      activeAngleIndex: -1,
       showPenSelectionPopup: false,
       penAngles: [0, 25, 30, 50, 80], // Available pen angles
       selectedPenAngle: null, // Currently selected pen angle
       testTracePath: "", // Path for testing the pen
       images: [],
+      angleStatistics: {},
       isFirstClick: true,
       horizontalStatistics: {}, // Stores horizontal statistics
       verticalStatistics: {},
@@ -662,6 +702,7 @@ export default {
       currentCommentPosition: null,
       comments: [],
       isMeasuring: false,
+      editingAnnotationIndex: -1,
       draggingCommentIndex: null, // Index of the comment being dragged
       dragOffset: { x: 0, y: 0 }, // Offset between the mouse and comment position
       scalingFactor: 1,
@@ -1010,6 +1051,31 @@ export default {
         };
       });
     },
+    calculateAngleStatistics() {
+      // Fetch all "measure" annotations for the current page
+      const angleAnnotations =
+        this.annotationsByPage[this.currentPage]?.filter(
+          (annotation) => annotation.type === "measure"
+        ) || [];
+
+      // Extract the angles
+      const angles = angleAnnotations.map((annotation) => annotation.angle);
+
+      // Calculate statistics
+      this.angleStatistics = {
+        average: this.calculateAverage(angles),
+        standardDeviation: this.calculateStandardDeviation(angles),
+        mode: this.calculateMode(angles),
+      };
+
+      // Show the angle statistics popup
+      this.showAngleStatistics = true;
+    },
+
+    closeAngleStatisticsPopup() {
+      this.showAngleStatistics = false;
+    },
+
     discardCroppedImage() {
       this.croppedImage = null;
       this.croppedSvg = null;
@@ -1066,6 +1132,8 @@ export default {
         this.showTraces = true;
         this.measurePoints = []; // Clear existing points
         this.draggingPoint = -1; // Reset dragging state
+        this.isCreatingAngle = false; // Reset angle creation state
+        this.activeAngleIndex = -1; // Reset active angle index
         this.traceModeActive = false;
         this.showToolMessage(
           this.measureModeActive
@@ -1177,41 +1245,28 @@ export default {
         };
         this.dynamicTracePath = `M${x},${y}`;
       } else if (this.measureModeActive) {
-        // Start or continue angle measurement
         const { x, y } = this.getMousePosition(event);
-
-        // Check if we're dragging an existing point
-        const nearestPointIndex = this.findNearestPoint(x, y, 10); // 10px threshold
-        if (nearestPointIndex !== -1) {
-          this.draggingPoint = nearestPointIndex;
-          return; // Exit early if dragging an existing point
-        }
-        // Prevent adding more than 3 points
-        if (this.measurePoints.length >= 3) {
-          this.showToolMessage(
-            "Three points already created. Drag points to adjust."
-          );
+        const nearest = this.findNearestPoint(x, y, 10);
+        if (nearest.pointIndex !== -1) {
+          const annotation =
+            this.annotationsByPage[this.currentPage][nearest.annotationIndex];
+          this.measurePoints = [...annotation.points];
+          this.editingAnnotationIndex = nearest.annotationIndex;
+          this.draggingPoint = nearest.pointIndex;
           return;
         }
 
-        // Add a new point
+        if (this.measurePoints.length >= 3) return;
         this.measurePoints.push({ x, y });
 
-        // Calculate the angle if we have 3 points
         if (this.measurePoints.length === 3) {
-          this.calculatedAngle = this.calculateAngle(
-            this.measurePoints[0],
-            this.measurePoints[1],
-            this.measurePoints[2]
-          );
-
-          // Save the angle to annotations
+          this.calculatedAngle = this.calculateAngle(...this.measurePoints);
           this.annotationsByPage[this.currentPage].push({
             type: "measure",
-            points: [...this.measurePoints], // Save a copy of the points
+            points: [...this.measurePoints],
             angle: this.calculatedAngle,
           });
-          this.showToolMessage("Angle created. Drag points to adjust.");
+          this.measurePoints = []; // Reset after creating
         }
       }
     },
@@ -1248,26 +1303,26 @@ export default {
         this.currentStroke.points.push({ x, y });
         this.dynamicTracePath = this.formatPoints(this.currentStroke.points);
       } else if (this.measureModeActive && this.draggingPoint !== -1) {
-        // Adjust the position of a draggable point
         const { x, y } = this.getMousePosition(event);
         this.measurePoints[this.draggingPoint] = { x, y };
 
-        // Recalculate the angle if all 3 points are present
-        if (this.measurePoints.length === 3) {
-          this.calculatedAngle = this.calculateAngle(
-            this.measurePoints[0],
-            this.measurePoints[1],
-            this.measurePoints[2]
-          );
+        if (this.editingAnnotationIndex !== -1) {
+          const annotation =
+            this.annotationsByPage[this.currentPage][
+              this.editingAnnotationIndex
+            ];
+          const newAngle =
+            this.measurePoints.length === 3
+              ? this.calculateAngle(...this.measurePoints)
+              : 0;
 
-          // Update the saved angle in annotations
-          const currentAngle = this.annotationsByPage[this.currentPage].find(
-            (annotation) => annotation.type === "measure"
-          );
-          if (currentAngle) {
-            currentAngle.points = [...this.measurePoints];
-            currentAngle.angle = this.calculatedAngle;
-          }
+          this.annotationsByPage[this.currentPage][
+            this.editingAnnotationIndex
+          ] = {
+            ...annotation,
+            points: [...this.measurePoints],
+            angle: newAngle,
+          };
         }
       }
     },
@@ -1284,13 +1339,14 @@ export default {
         this.currentStroke = null;
         this.dynamicTracePath = "";
       } else if (this.measureModeActive) {
-        this.annotationsByPage[this.currentPage].push({
-          type: "measure",
-          points: [...this.measurePoints], // Store a copy of the points
-          angle: this.calculatedAngle,
-        });
-
         this.draggingPoint = -1;
+        this.editingAnnotationIndex = -1;
+        if (
+          this.measurePoints.length === 3 &&
+          this.editingAnnotationIndex === -1
+        ) {
+          this.measurePoints = []; // Clear points after saving new annotation
+        }
       }
     },
 
@@ -1486,16 +1542,29 @@ export default {
       }
     },
     findNearestPoint(x, y, threshold = 10) {
-      const currentAngle = this.annotationsByPage[this.currentPage].find(
-        (annotation) => annotation.type === "measure"
-      );
+      const measureAnnotations = this.annotationsByPage[
+        this.currentPage
+      ].filter((annotation) => annotation.type === "measure");
 
-      if (!currentAngle) return -1;
+      let nearestDistance = Infinity;
+      let nearestAnnotationIndex = -1;
+      let nearestPointIndex = -1;
 
-      return currentAngle.points.findIndex(
-        (point) =>
-          Math.abs(point.x - x) < threshold && Math.abs(point.y - y) < threshold
-      );
+      measureAnnotations.forEach((annotation, annIndex) => {
+        annotation.points.forEach((point, ptIndex) => {
+          const distance = Math.hypot(x - point.x, y - point.y);
+          if (distance < threshold && distance < nearestDistance) {
+            nearestDistance = distance;
+            nearestAnnotationIndex = annIndex;
+            nearestPointIndex = ptIndex;
+          }
+        });
+      });
+
+      return {
+        annotationIndex: nearestAnnotationIndex,
+        pointIndex: nearestPointIndex,
+      };
     },
 
     async saveCroppedImage() {
