@@ -46,6 +46,11 @@
           <span>Bands</span>
         </div>
 
+        <div class="toolbar-item" @click="startCrop">
+          <i class="fa-solid fa-scissors"></i>
+          <span>Crop</span>
+        </div>
+
         <div class="tool-message" v-if="toolMessage">{{ toolMessage }}</div>
 
         <!-- Add the Calculate button -->
@@ -71,9 +76,25 @@
           <i class="fa-solid fa-save"></i>
           <span>Save</span>
         </div>
-        <div class="toolbar-item" @click="clearAnnotations">
+        <div
+          class="toolbar-item clear-container"
+          @click.stop="toggleClearDropdown"
+        >
           <i class="fa-regular fa-trash-can"></i>
           <span>Clear</span>
+          <!-- Dropdown Menu -->
+          <div v-if="showClearDropdown" class="clear-dropdown">
+            <div @click.stop="clearHighlights">Clear Highlights</div>
+            <div @click.stop="clearUnderlines">Clear Underlines</div>
+            <div @click.stop="clearComments">Clear Comments</div>
+            <div @click.stop="clearTraces">Clear Traces</div>
+            <div @click.stop="clearAngles">Clear Angles</div>
+            <div @click.stop="clearHorizontalLengths">
+              Clear Horizontal Lengths
+            </div>
+            <div @click.stop="clearVerticalLengths">Clear Vertical Lengths</div>
+            <div @click.stop="clearAll">Clear All</div>
+          </div>
         </div>
       </div>
     </div>
@@ -365,15 +386,13 @@
         </g>
 
         <!-- Render dynamic trace -->
-        <!-- <polyline
+        <polyline
           v-if="dynamicTracePath"
           :points="dynamicTracePath"
           stroke="red"
           stroke-width="2"
           fill="none"
         />
-
- -->
       </svg>
       <!-- Render dynamic length measurement rectangle -->
       <div
@@ -631,6 +650,7 @@ export default {
       isCreatingAngle: false, // Track if a new angle is being created
       activeAngleIndex: -1,
       showPenSelectionPopup: false,
+      showClearDropdown: false,
       penAngles: [0, 25, 30, 50, 80], // Available pen angles
       selectedPenAngle: null, // Currently selected pen angle
       testTracePath: "", // Path for testing the pen
@@ -1760,21 +1780,98 @@ export default {
       event.stopPropagation();
       this.draggingPoint = index;
     },
-    clearAnnotations() {
+    toggleClearDropdown() {
+      this.showClearDropdown = !this.showClearDropdown;
+    },
+
+    clearHighlights() {
+      this.annotationsByPage[this.currentPage] = this.annotationsByPage[
+        this.currentPage
+      ].filter((annotation) => annotation.type !== "highlight");
+      this.showToolMessage("Highlights cleared.");
+      this.showClearDropdown = false;
+    },
+
+    clearUnderlines() {
+      this.annotationsByPage[this.currentPage] = this.annotationsByPage[
+        this.currentPage
+      ].filter((annotation) => annotation.type !== "underline");
+      this.showToolMessage("Underlines cleared.");
+      this.showClearDropdown = false;
+    },
+
+    clearComments() {
+      this.comments[this.currentPage] = [];
+      this.showToolMessage("Comments cleared.");
+      this.showClearDropdown = false;
+    },
+
+    clearTraces() {
+      this.annotationsByPage[this.currentPage] = this.annotationsByPage[
+        this.currentPage
+      ].filter((annotation) => annotation.type !== "trace");
+      this.showToolMessage("Traces cleared.");
+      this.showClearDropdown = false;
+    },
+
+    clearAngles() {
+      this.annotationsByPage[this.currentPage] = this.annotationsByPage[
+        this.currentPage
+      ].filter((annotation) => annotation.type !== "measure");
+      this.showToolMessage("Angles cleared.");
+      this.showClearDropdown = false;
+    },
+
+    clearHorizontalLengths() {
+      const horizontalTypes = [
+        "ascenders",
+        "descenders",
+        "interlinear",
+        "upperMargin",
+        "lowerMargin",
+      ];
+      horizontalTypes.forEach((type) => {
+        if (this.lengthMeasurements[type]) {
+          delete this.lengthMeasurements[type][this.currentPage];
+        }
+      });
+      this.showToolMessage("Horizontal lengths cleared.");
+      this.showClearDropdown = false;
+    },
+
+    clearVerticalLengths() {
+      const verticalTypes = ["internalMargin", "intercolumnSpaces"];
+      verticalTypes.forEach((type) => {
+        if (this.lengthMeasurements[type]) {
+          delete this.lengthMeasurements[type][this.currentPage];
+        }
+      });
+      this.showToolMessage("Vertical lengths cleared.");
+      this.showClearDropdown = false;
+    },
+
+    clearAll() {
       this.annotationsByPage[this.currentPage] = [];
       this.comments[this.currentPage] = [];
-      this.lengthMeasurements = {
-        ascenders: {},
-        descenders: {},
-        interlinear: {},
-        upperMargin: {},
-        lowerMargin: {},
-        internalMargin: {},
-        intercolumnSpaces: {},
-      };
+      const allTypes = [
+        "ascenders",
+        "descenders",
+        "interlinear",
+        "upperMargin",
+        "lowerMargin",
+        "internalMargin",
+        "intercolumnSpaces",
+      ];
+      allTypes.forEach((type) => {
+        if (this.lengthMeasurements[type]) {
+          delete this.lengthMeasurements[type][this.currentPage];
+        }
+      });
       this.strokes = [];
-      this.measurePoints = []; // Clear angle measurement points
-      this.calculatedAngle = 0; // Reset angle
+      this.measurePoints = [];
+      this.calculatedAngle = 0;
+      this.showToolMessage("All annotations cleared.");
+      this.showClearDropdown = false;
     },
 
     showLengthPopup(type) {
@@ -2700,5 +2797,30 @@ button:hover {
   height: 100%;
   z-index: 10000;
   pointer-events: none;
+}
+
+.clear-container {
+  position: relative;
+}
+
+.clear-dropdown {
+  position: absolute;
+  top: 100%; /* Position below the button */
+  left: 0;
+  background-color: white;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  z-index: 1000; /* Ensure it appears above other elements */
+  min-width: 150px; /* Set a minimum width */
+}
+
+.clear-dropdown div {
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.clear-dropdown div:hover {
+  background-color: #f1f1f1;
 }
 </style>
