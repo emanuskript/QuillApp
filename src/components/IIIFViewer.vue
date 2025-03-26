@@ -2295,6 +2295,11 @@ export default {
   flex-direction: column;
   height: 100vh;
   background-color: #f1f1f1;
+  font-family: "Arial", "Helvetica", sans-serif;
+}
+
+body {
+  font-family: "Arial", "Helvetica", sans-serif; /* Use Sans-serif fonts */
 }
 
 .top-bar {
@@ -2324,6 +2329,8 @@ export default {
   font-size: 12px;
   color: #333;
   cursor: pointer;
+  padding: 3px;
+  font-family: "Arial", "Helvetica", sans-serif;
 }
 .toolbar-item.active {
   color: #007bff;
@@ -2476,6 +2483,7 @@ export default {
   border-radius: 4px;
   box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
   position: relative;
+  font-family: "Arial", "Helvetica", sans-serif;
 }
 .comment-bubble::after {
   content: "";
@@ -2599,6 +2607,7 @@ button {
   border: none;
   border-radius: 5px;
   cursor: pointer;
+  font-family: "Arial", "Helvetica", sans-serif;
 }
 
 button:hover {
@@ -2669,6 +2678,7 @@ button:hover {
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
   max-width: 400px;
   width: 100%;
+  font-family: "Arial", "Helvetica", sans-serif;
 }
 
 .statistics-popup-content table {
