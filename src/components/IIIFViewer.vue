@@ -2307,7 +2307,7 @@ body {
   justify-content: space-between;
   align-items: center;
   background-color: #f1f1f1;
-  border-bottom: 1px solid #ddd;
+  border-bottom: 2px solid #ddd;
   padding: 10px 20px;
 }
 
@@ -2319,7 +2319,7 @@ body {
   display: flex;
   justify-content: center;
   gap: 30px;
-  flex: 1;
+  flex: 2;
 }
 
 .toolbar-item {
