@@ -1,3 +1,4 @@
+
 <template>
   <div class="viewer-container">
     <!-- Top Bar -->
@@ -175,6 +176,39 @@
           </tbody>
         </table>
         <button @click="closeAngleStatisticsPopup">Close</button>
+      </div>
+    </div>
+
+    <!-- Cropped Image Popup -->
+    <div v-if="croppedImage" class="cropped-popup">
+      <div class="cropped-popup-content">
+        <h3>Cropped Image</h3>
+        <img :src="croppedImage" alt="Cropped" class="cropped-image" />
+        <div class="toolbar">
+          <!-- Reuse the top bar buttons for the cropped image -->
+          <div class="toolbar-item" @click="selectTool('highlight')">
+            <i class="fa-solid fa-highlighter"></i>
+            <span>Highlight</span>
+          </div>
+          <div class="toolbar-item" @click="selectTool('underline')">
+            <i class="fa-solid fa-underline"></i>
+            <span>Underline</span>
+          </div>
+          <div class="toolbar-item" @click="selectTool('comment')">
+            <i class="fa-regular fa-comment"></i>
+            <span>Comment</span>
+          </div>
+          <div class="toolbar-item" @click="selectTool('trace')">
+            <i class="fa-solid fa-pencil"></i>
+            <span>Trace</span>
+          </div>
+          <div class="toolbar-item" @click="selectTool('measure')">
+            <i class="fa-solid fa-angle-up"></i>
+            <span>Measure</span>
+            <span>Angle</span>
+          </div>
+        </div>
+        <button @click="closeCroppedPopup">Close</button>
       </div>
     </div>
 
@@ -712,6 +746,7 @@ export default {
       calculatedAngle: 0, // Measured angle between the points
       measureModeActive: false,
       traceModeActive: false,
+      cropButtonClicked: false,
       commentModeActive: false,
       highlightModeActive: false, // Tracks if highlight mode is active
       underlineModeActive: false, // Tracks if underline mode is active
@@ -1200,9 +1235,16 @@ export default {
         !this.highlightModeActive &&
         !this.underlineModeActive &&
         !this.traceModeActive &&
-        !this.measureModeActive
+        !this.measureModeActive &&
+        !this.croppingStarted
       ) {
         return; // Exit the function early if no relevant tool is active
+      }
+
+      if (this.croppingStarted && this.cropButtonClicked) {
+        const { x, y } = this.getMousePosition(event);
+        this.startPoint = { x, y };
+        this.currentSquare = { x, y, width: 0, height: 0 };
       }
 
       // Highlight Mode
@@ -1296,11 +1338,23 @@ export default {
         !this.highlightModeActive &&
         !this.underlineModeActive &&
         !this.traceModeActive &&
-        !this.measureModeActive
+        !this.measureModeActive &&
+        !this.croppingStarted &&
+        !this.startPoint
       ) {
         return; // Exit the function early if no relevant tool is active
       }
 
+      if (this.startPoint && this.cropButtonClicked) {
+        const { x, y } = this.getMousePosition(event);
+        console.log("Mouse position:", this.startPoint);
+        this.currentSquare = {
+          x: Math.min(x, this.startPoint.x),
+          y: Math.min(y, this.startPoint.y),
+          width: Math.abs(x - this.startPoint.x),
+          height: Math.abs(y - this.startPoint.y),
+        };
+      }
       // Highlight Mode
       if (this.highlightModeActive && this.currentSquare) {
         // Update the highlight rectangle dimensions as the mouse moves
@@ -1367,6 +1421,53 @@ export default {
         ) {
           this.measurePoints = []; // Clear points after saving new annotation
         }
+      } else if (
+        (this.croppingStarted || this.currentSquare) &&
+        this.cropButtonClicked
+      ) {
+        const { x, y, width, height } = this.currentSquare;
+        const imageElement = this.$refs.image;
+        const naturalWidth = imageElement.naturalWidth;
+        const naturalHeight = imageElement.naturalHeight;
+        const rect = imageElement.getBoundingClientRect();
+        const scaleX = naturalWidth / rect.width;
+        const scaleY = naturalHeight / rect.height;
+
+        const scaledX = (x - rect.left) * scaleX;
+        const scaledY = y * scaleY;
+        const scaledWidth = width * scaleX;
+        const scaledHeight = height * scaleY;
+
+        const canvas = document.createElement("canvas");
+        canvas.width = scaledWidth;
+        canvas.height = scaledHeight;
+        const ctx = canvas.getContext("2d");
+
+        const img = new Image();
+        img.crossOrigin = "anonymous"; // Allow cross-origin requests
+        img.src = this.currentImage;
+        img.onload = () => {
+          ctx.drawImage(
+            img,
+            scaledX,
+            scaledY,
+            scaledWidth,
+            scaledHeight,
+            0,
+            0,
+            scaledWidth,
+            scaledHeight
+          );
+          this.croppedImage = canvas.toDataURL("image/png");
+        };
+
+        img.onerror = (error) => {
+          console.error("Error loading image:", error);
+        };
+
+        this.croppingStarted = false;
+        this.currentSquare = null;
+        this.startPoint = null;
       }
     },
 
@@ -1437,6 +1538,18 @@ export default {
     // Stop dragging
     stopDraggingComment() {
       this.draggingCommentIndex = null;
+    },
+
+    startCrop() {
+      this.croppingStarted = true;
+      this.cropButtonClicked = true;
+      this.currentSquare = null;
+      this.startPoint = null;
+      this.showToolMessage("Click and drag to crop.");
+    },
+
+    closeCroppedPopup() {
+      this.croppedImage = null;
     },
 
     startAnnotating(event) {
@@ -2527,6 +2640,47 @@ body {
   padding: 10px;
   width: 300px;
   z-index: 1000;
+}
+.cropping-rectangle {
+  position: absolute;
+  border: 2px dashed blue;
+  background-color: rgba(0, 0, 255, 0.2);
+  pointer-events: none;
+  z-index: 100;
+}
+
+.cropped-popup {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: white;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  z-index: 1000;
+  padding: 20px;
+  text-align: center;
+}
+
+.cropped-popup-content img {
+  max-width: 100%;
+  max-height: 300px;
+  margin-bottom: 20px;
+}
+
+.cropped-popup-content button {
+  margin-top: 10px;
+  padding: 8px 16px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.cropped-popup-content button:hover {
+  background-color: #0056b3;
 }
 
 .comment-input-box {
