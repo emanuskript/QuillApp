@@ -1,4 +1,3 @@
-
 <template>
   <div class="viewer-container">
     <!-- Top Bar -->
@@ -179,36 +178,22 @@
       </div>
     </div>
 
+    <!-- Blurred Background -->
+    <div v-if="croppedImage" class="blurred-background" style="top: 90px"></div>
+
     <!-- Cropped Image Popup -->
     <div v-if="croppedImage" class="cropped-popup">
       <div class="cropped-popup-content">
         <h3>Cropped Image</h3>
-        <img :src="croppedImage" alt="Cropped" class="cropped-image" />
-        <div class="toolbar">
-          <!-- Reuse the top bar buttons for the cropped image -->
-          <div class="toolbar-item" @click="selectTool('highlight')">
-            <i class="fa-solid fa-highlighter"></i>
-            <span>Highlight</span>
-          </div>
-          <div class="toolbar-item" @click="selectTool('underline')">
-            <i class="fa-solid fa-underline"></i>
-            <span>Underline</span>
-          </div>
-          <div class="toolbar-item" @click="selectTool('comment')">
-            <i class="fa-regular fa-comment"></i>
-            <span>Comment</span>
-          </div>
-          <div class="toolbar-item" @click="selectTool('trace')">
-            <i class="fa-solid fa-pencil"></i>
-            <span>Trace</span>
-          </div>
-          <div class="toolbar-item" @click="selectTool('measure')">
-            <i class="fa-solid fa-angle-up"></i>
-            <span>Measure</span>
-            <span>Angle</span>
-          </div>
+        <hr class="popup-divider" />
+        <div class="cropped-image-container">
+          <img :src="croppedImage" alt="Cropped" class="cropped-image" />
         </div>
-        <button @click="closeCroppedPopup">Close</button>
+        <div class="popup-actions">
+          <button @click="saveCroppedImageAsPNG">Save as PNG</button>
+          <button @click="saveCroppedImageAsSVG">Save as SVG</button>
+          <button @click="closeCroppedPopup">Close</button>
+        </div>
       </div>
     </div>
 
@@ -335,8 +320,8 @@
       ref="viewer"
     >
       <img
-        v-if="currentImage"
-        :src="currentImage"
+        v-if="croppedImage || currentImage"
+        :src="croppedImage || currentImage"
         ref="image"
         class="image-viewer"
         @load="handleImageLoad"
@@ -657,6 +642,7 @@
         <foreignObject
           :width="popupDimensions.width"
           :height="popupDimensions.height"
+          draggable="false"
         >
           <div v-html="croppedSvg"></div>
         </foreignObject>
@@ -1464,7 +1450,13 @@ export default {
         img.onerror = (error) => {
           console.error("Error loading image:", error);
         };
-
+        this.croppedSvg = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${scaledWidth} ${scaledHeight}" width="${scaledWidth}" height="${scaledHeight}">
+        <image href="${
+          this.currentImage
+        }" x="${-scaledX}" y="${-scaledY}" width="${naturalWidth}" height="${naturalHeight}" />
+      </svg>
+    `;
         this.croppingStarted = false;
         this.currentSquare = null;
         this.startPoint = null;
@@ -1546,6 +1538,25 @@ export default {
       this.currentSquare = null;
       this.startPoint = null;
       this.showToolMessage("Click and drag to crop.");
+    },
+
+    saveCroppedImageAsPNG() {
+      const link = document.createElement("a");
+      link.href = this.croppedImage; // The PNG data URL
+      link.download = "cropped-image.png";
+      link.click();
+    },
+    saveCroppedImageAsSVG() {
+      if (!this.croppedSvg) {
+        console.error("No SVG data available to save.");
+        return;
+      }
+      const svgBlob = new Blob([this.croppedSvg], { type: "image/svg+xml" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(svgBlob);
+      link.download = "cropped-image.svg";
+      link.click();
+      URL.revokeObjectURL(link.href);
     },
 
     closeCroppedPopup() {
@@ -2465,7 +2476,7 @@ body {
   color: white;
   padding: 10px 20px;
   border-radius: 5px;
-  z-index: 1000;
+  z-index: 1100;
   font-size: 14px;
   text-align: center;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Optional: Add a subtle shadow */
@@ -2514,7 +2525,7 @@ body {
   background-color: blue; /* Color of the underline */
   height: 2px; /* Height of the underline */
   pointer-events: none; /* Ensure it doesn't block mouse events */
-  z-index: 1; /* Ensure it appears above other elements */
+  z-index: 1100; /* Ensure it appears above other elements */
 }
 
 .cropping-rectangle {
@@ -2649,6 +2660,17 @@ body {
   z-index: 100;
 }
 
+.blurred-background {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  backdrop-filter: blur(8px); /* Apply blur effect */
+  background-color: rgba(0, 0, 0, 0.3); /* Add a semi-transparent overlay */
+  z-index: 999; /* Ensure it appears below the cropped popup */
+}
+
 .cropped-popup {
   position: fixed;
   top: 50%;
@@ -2658,7 +2680,7 @@ body {
   border: 1px solid #ccc;
   border-radius: 8px;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-  z-index: 1000;
+  z-index: 1000; /* Ensure it appears above the blurred background */
   padding: 20px;
   text-align: center;
 }
@@ -2799,7 +2821,7 @@ button:hover {
   border: 1px solid #ccc;
   border-radius: 4px;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-  z-index: 1000; /* Ensure it appears above other elements */
+  z-index: 1100; /* Ensure it appears above other elements */
   min-width: 150px; /* Set a minimum width */
 }
 
@@ -2822,7 +2844,7 @@ button:hover {
   justify-content: center;
   align-items: center;
   background-color: rgba(0, 0, 0, 0.5);
-  z-index: 1000;
+  z-index: 1100;
 }
 
 .statistics-popup-content {
@@ -2889,7 +2911,7 @@ button:hover {
   justify-content: center;
   align-items: center;
   background-color: rgba(0, 0, 0, 0.5);
-  z-index: 1000;
+  z-index: 1100;
 }
 
 .pen-selection-content {
@@ -2975,7 +2997,7 @@ button:hover {
   border: 1px solid #ccc;
   border-radius: 4px;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-  z-index: 1000; /* Ensure it appears above other elements */
+  z-index: 1100; /* Ensure it appears above other elements */
   min-width: 150px; /* Set a minimum width */
 }
 
