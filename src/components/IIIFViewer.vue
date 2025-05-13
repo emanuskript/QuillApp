@@ -815,7 +815,7 @@ export default {
       );
     },
     currentImage() {
-      return this.images[this.currentPage] || null;
+      return this.croppedImage || this.images[this.currentPage] || null;
     },
     totalPages() {
       return this.images.length;
@@ -1533,6 +1533,9 @@ export default {
     },
 
     startCrop() {
+      if (this.croppedImage) {
+        return; // Exit the function if a cropped image is already displayed
+      }
       this.croppingStarted = true;
       this.cropButtonClicked = true;
       this.currentSquare = null;
@@ -2525,7 +2528,7 @@ body {
   background-color: blue; /* Color of the underline */
   height: 2px; /* Height of the underline */
   pointer-events: none; /* Ensure it doesn't block mouse events */
-  z-index: 1100; /* Ensure it appears above other elements */
+  z-index: 1000; /* Ensure it appears above other elements */
 }
 
 .cropping-rectangle {
@@ -2950,6 +2953,7 @@ button:hover {
   margin-bottom: 20px; /* Add margin between the pen and the angle text */
   transform-origin: left center; /* Rotate around the left edge */
   position: relative;
+  z-index: 100000;
 }
 
 .pen-nib {
