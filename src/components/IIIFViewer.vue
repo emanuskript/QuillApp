@@ -182,14 +182,34 @@
     <div v-if="croppedImage" class="blurred-background" style="top: 90px"></div>
 
     <!-- Cropped Image Popup -->
+    <!-- Cropped Image Popup -->
     <div v-if="croppedImage" class="cropped-popup">
       <div class="cropped-popup-content">
         <h3>Cropped Image</h3>
         <hr class="popup-divider" />
         <div class="cropped-image-container">
-          <img :src="croppedImage" alt="Cropped" class="cropped-image" />
+          <img
+            :src="croppedImage"
+            alt="Cropped"
+            class="cropped-image"
+            @mousedown="startAnnotating"
+            @mousemove="annotateImage"
+            @mouseup="endAnnotating"
+            @mouseleave="endAnnotating"
+          />
+          <!-- Render the cropped image -->
+
+          <!-- Render annotations -->
+          <polyline
+            v-for="(stroke, index) in croppedStrokes"
+            :key="'stroke-' + index"
+            :points="formatPoints(stroke.points)"
+            :stroke="stroke.color"
+            stroke-width="2"
+            fill="none"
+          />
         </div>
-        <div class="popup-actions">
+        <div class="popup-actions" style="text-align: center">
           <button @click="saveCroppedImageAsPNG">Save as PNG</button>
           <button @click="saveCroppedImageAsSVG">Save as SVG</button>
           <button @click="closeCroppedPopup">Close</button>
@@ -644,7 +664,7 @@
           :height="popupDimensions.height"
           draggable="false"
         >
-          <div v-html="croppedSvg"></div>
+          <div v-html="croppedImage"></div>
         </foreignObject>
       </svg>
     </div>
@@ -747,6 +767,9 @@ export default {
       draggingCommentIndex: null, // Index of the comment being dragged
       dragOffset: { x: 0, y: 0 }, // Offset between the mouse and comment position
       scalingFactor: 1,
+      croppedStrokes: [],
+      croppedMeasurePoints: [],
+      croppedCurrentStroke: null,
     };
   },
   computed: {
@@ -1016,79 +1039,102 @@ export default {
 
       const { x, y, width, height } = this.currentSquare;
       const imageElement = this.$refs.image;
-      const naturalWidth = imageElement.naturalWidth;
-      const naturalHeight = imageElement.naturalHeight;
       const rect = imageElement.getBoundingClientRect();
-      const scaleX = naturalWidth / rect.width;
-      const scaleY = naturalHeight / rect.height;
 
+      // Calculate scaling factors
+      const scaleX = imageElement.naturalWidth / rect.width;
+      const scaleY = imageElement.naturalHeight / rect.height;
+
+      // Calculate actual crop dimensions in original image coordinates
       const scaledX = (x - rect.left) * scaleX;
-      const scaledY = y * scaleY;
+      const scaledY = (y - rect.top) * scaleY;
       const scaledWidth = width * scaleX;
       const scaledHeight = height * scaleY;
 
-      const popupWidth = (window.innerWidth * 2) / 3;
-      const popupHeight = (scaledHeight / scaledWidth) * popupWidth;
+      // Set popup dimensions to match the crop aspect ratio
+      const maxPopupWidth = window.innerWidth * 0.8;
+      const maxPopupHeight = window.innerHeight * 0.8;
+      const aspectRatio = scaledWidth / scaledHeight;
 
-      // Save the cropped SVG
+      let popupWidth = scaledWidth;
+      let popupHeight = scaledHeight;
+
+      // Scale down if too large for viewport
+      if (popupWidth > maxPopupWidth) {
+        popupWidth = maxPopupWidth;
+        popupHeight = popupWidth / aspectRatio;
+      }
+      if (popupHeight > maxPopupHeight) {
+        popupHeight = maxPopupHeight;
+        popupWidth = popupHeight * aspectRatio;
+      }
+
+      // Create SVG with just the cropped portion
       this.croppedSvg = `
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${scaledWidth} ${scaledHeight}" width="${popupWidth}" height="${popupHeight}">
-      <image href="${
-        this.currentImage
-      }" x="${-scaledX}" y="${-scaledY}" width="${naturalWidth}" height="${naturalHeight}" />
+    <svg xmlns="http://www.w3.org/2000/svg" 
+         viewBox="0 0 ${scaledWidth} ${scaledHeight}"
+         width="${popupWidth}" 
+         height="${popupHeight}"
+         preserveAspectRatio="xMidYMid meet">
+      <image href="${this.currentImage}" 
+             x="0" 
+             y="0" 
+             width="${scaledWidth}" 
+             height="${scaledHeight}" 
+             transform="translate(${-scaledX} ${-scaledY})"/>
     </svg>
   `;
 
-      // Set popup dimensions
       this.popupDimensions = { width: popupWidth, height: popupHeight };
-
-      // Reset cropping state
       this.croppingStarted = false;
       this.currentSquare = null;
       this.startPoint = null;
 
-      // Generate and display the cropped PNG
       await this.generateCroppedPng();
     },
 
     async generateCroppedPng() {
-      if (!this.croppedSvg) {
-        console.error("Cannot generate cropped PNG: No SVG available.");
-        return;
-      }
+      if (!this.croppedSvg) return;
 
-      // Create an image element from the SVG
-      const svgBlob = new Blob([this.croppedSvg], { type: "image/svg+xml" });
-      const svgUrl = URL.createObjectURL(svgBlob);
+      // Create a canvas with the exact crop dimensions
+      const { width, height } = this.popupDimensions;
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
 
+      // Create temporary image to draw
       const img = new Image();
-      img.src = svgUrl;
+      img.src = this.currentImage;
 
-      await new Promise((resolve, reject) => {
+      await new Promise((resolve) => {
         img.onload = () => {
-          // Create a canvas to render the PNG
-          const canvas = document.createElement("canvas");
-          canvas.width = img.width;
-          canvas.height = img.height;
-          const ctx = canvas.getContext("2d");
+          // Calculate source rectangle
+          const imageElement = this.$refs.image;
+          const rect = imageElement.getBoundingClientRect();
+          const scaleX = img.naturalWidth / rect.width;
+          const scaleY = img.naturalHeight / rect.height;
 
-          // Draw the SVG onto the canvas
-          ctx.drawImage(img, 0, 0);
+          const sx = (this.currentSquare.x - rect.left) * scaleX;
+          const sy = (this.currentSquare.y - rect.top) * scaleY;
+          const sw = this.currentSquare.width * scaleX;
+          const sh = this.currentSquare.height * scaleY;
 
-          // Convert the canvas to a PNG data URL
-          const pngUrl = canvas.toDataURL("image/png");
+          // Draw just the cropped portion
+          ctx.drawImage(
+            img,
+            sx,
+            sy,
+            sw,
+            sh, // source rectangle
+            0,
+            0,
+            width,
+            height // destination rectangle
+          );
 
-          // Display the PNG in the popup
-          this.croppedImage = pngUrl;
-
-          // Clean up
-          URL.revokeObjectURL(svgUrl);
+          this.croppedImage = canvas.toDataURL("image/png");
           resolve();
-        };
-
-        img.onerror = (error) => {
-          console.error("Error loading SVG:", error);
-          reject(error);
         };
       });
     },
@@ -1152,7 +1198,7 @@ export default {
       this.currentPage = newPage;
     },
     selectTool(tool) {
-      if (!this.currentImage) {
+      if (!this.currentImage || !this.currentImage) {
         return;
       }
       this.currentTool = tool;
@@ -1567,7 +1613,16 @@ export default {
     },
 
     startAnnotating(event) {
-      if (this.measureModeActive) {
+      if (this.croppedImage) {
+        // Handle annotations on the cropped image
+        const { x, y } = this.getCroppedMousePosition(event);
+        if (this.traceModeActive) {
+          this.croppedCurrentStroke = {
+            points: [{ x, y }],
+            color: this.generateRandomColor(),
+          };
+        }
+      } else if (this.measureModeActive) {
         this.startAngleMeasurement(event);
       } else if (this.traceModeActive) {
         this.startDrawing(event);
@@ -1575,7 +1630,10 @@ export default {
     },
 
     annotateImage(event) {
-      if (this.measureModeActive) {
+      if (this.croppedImage && this.croppedCurrentStroke) {
+        const { x, y } = this.getCroppedMousePosition(event);
+        this.croppedCurrentStroke.points.push({ x, y });
+      } else if (this.measureModeActive) {
         this.moveAnglePoint(event);
       } else if (this.traceModeActive) {
         this.dynamicTrace(event);
@@ -1583,11 +1641,24 @@ export default {
     },
 
     endAnnotating() {
-      if (this.measureModeActive) {
+      if (this.croppedImage && this.croppedCurrentStroke) {
+        this.croppedStrokes.push(this.croppedCurrentStroke);
+        this.croppedCurrentStroke = null;
+      } else if (this.measureModeActive) {
         this.stopAngleDragging();
       } else if (this.traceModeActive) {
         this.endDrawing();
       }
+    },
+
+    getCroppedMousePosition(event) {
+      const svg = event.target.closest("svg");
+
+      const rect = svg.getBoundingClientRect();
+      return {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      };
     },
     startDrawing(event) {
       const { x, y } = this.getPopupMousePosition(event);
@@ -2436,6 +2507,8 @@ body {
   background-color: #f1f1f1;
   border-bottom: 1px solid #ddd;
   padding: 10px 20px;
+  z-index: 1001; /* Above the cropped popup */
+  position: relative; /* Ensure z-index works */
 }
 
 .logo {
@@ -2494,6 +2567,8 @@ body {
   align-items: center;
   margin: 10px 0;
   gap: 10px;
+  z-index: 1001;
+  position: relative;
 }
 
 .page-input-container {
@@ -2683,9 +2758,20 @@ body {
   border: 1px solid #ccc;
   border-radius: 8px;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-  z-index: 1000; /* Ensure it appears above the blurred background */
+  z-index: 1001; /* Higher than blurred background */
   padding: 20px;
-  text-align: center;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.pen-selection-popup,
+.statistics-popup,
+.length-popup {
+  z-index: 1100; /* Above the cropped popup and top bar */
+}
+.blurred-background {
+  z-index: 999; /* Below the cropped popup */
 }
 
 .cropped-popup-content img {
