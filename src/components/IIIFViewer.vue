@@ -182,34 +182,100 @@
     <div v-if="croppedImage" class="blurred-background" style="top: 90px"></div>
 
     <!-- Cropped Image Popup -->
-    <!-- Cropped Image Popup -->
     <div v-if="croppedImage" class="cropped-popup">
       <div class="cropped-popup-content">
         <h3>Cropped Image</h3>
         <hr class="popup-divider" />
-        <div class="cropped-image-container">
+        <div
+          class="cropped-image-container"
+          ref="croppedContainer"
+          @mousedown="startCroppedAnnotation"
+          @mousemove="handleCroppedAnnotation"
+          @mouseup="endCroppedAnnotation"
+          @mouseleave="endCroppedAnnotation"
+        >
           <img
             :src="croppedImage"
             alt="Cropped"
             class="cropped-image"
-            @mousedown="startAnnotating"
-            @mousemove="annotateImage"
-            @mouseup="endAnnotating"
-            @mouseleave="endAnnotating"
+            draggable="false"
           />
-          <!-- Render the cropped image -->
 
-          <!-- Render annotations -->
-          <polyline
-            v-for="(stroke, index) in croppedStrokes"
-            :key="'stroke-' + index"
-            :points="formatPoints(stroke.points)"
-            :stroke="stroke.color"
-            stroke-width="2"
-            fill="none"
-          />
+          <!-- Annotation Layers -->
+          <!-- Highlights -->
+          <div
+            v-if="croppedCurrentHighlight"
+            class="highlight-rectangle"
+            :style="croppedCurrentHighlight.style"
+          ></div>
+          <div
+            v-for="(hl, index) in croppedHighlights"
+            :key="'chl-' + index"
+            class="highlight-rectangle"
+            :style="hl.style"
+          ></div>
+
+          <!-- Underlines -->
+          <div
+            v-if="croppedCurrentUnderline"
+            class="underline-line"
+            :style="croppedCurrentUnderline.style"
+          ></div>
+          <div
+            v-for="(ul, index) in croppedUnderlines"
+            :key="'cul-' + index"
+            class="underline-line"
+            :style="ul.style"
+          ></div>
+
+          <!-- Traces -->
+          <svg class="drawing-layer">
+            <polyline
+              v-if="croppedCurrentStroke"
+              :points="formatPoints(croppedCurrentStroke.points)"
+              :stroke="croppedCurrentStroke.color"
+              stroke-width="2"
+              fill="none"
+            />
+            <polyline
+              v-for="(stroke, index) in croppedStrokes"
+              :key="'cstroke-' + index"
+              :points="formatPoints(stroke.points)"
+              :stroke="stroke.color"
+              stroke-width="2"
+              fill="none"
+            />
+          </svg>
+
+          <!-- Measurements -->
+          <svg class="drawing-layer">
+            <g
+              v-for="(measure, index) in croppedMeasures"
+              :key="'cmeasure-' + index"
+            >
+              <line
+                v-for="(line, li) in measure.lines"
+                :key="'cline-' + li"
+                :x1="line.x1"
+                :y1="line.y1"
+                :x2="line.x2"
+                :y2="line.y2"
+                stroke="blue"
+                stroke-width="2"
+              />
+              <text
+                v-if="measure.angle"
+                :x="measure.text.x"
+                :y="measure.text.y"
+                fill="darkblue"
+                font-size="12"
+              >
+                {{ measure.angle }}°
+              </text>
+            </g>
+          </svg>
         </div>
-        <div class="popup-actions" style="text-align: center">
+        <div class="popup-actions">
           <button @click="saveCroppedImageAsPNG">Save as PNG</button>
           <button @click="saveCroppedImageAsSVG">Save as SVG</button>
           <button @click="closeCroppedPopup">Close</button>
@@ -651,10 +717,10 @@
       <svg
         :width="popupDimensions.width"
         :height="popupDimensions.height"
-        @mousedown="startAnnotating"
-        @mousemove="annotateImage"
-        @mouseup="endAnnotating"
-        @mouseleave="endAnnotating"
+        @mousedown="startTrace"
+        @mousemove="trace"
+        @mouseup="endTrace"
+        @mouseleave="endTrace"
         xmlns="http://www.w3.org/2000/svg"
         class="interactive-svg"
       >
@@ -664,7 +730,7 @@
           :height="popupDimensions.height"
           draggable="false"
         >
-          <div v-html="croppedImage"></div>
+          <div v-html="croppedSvg"></div>
         </foreignObject>
       </svg>
     </div>
@@ -696,6 +762,15 @@ export default {
       testTracePath: "", // Path for testing the pen
       images: [],
       angleStatistics: {},
+      croppedAnnotations: [],
+      croppedStrokes: [],
+      croppedMeasures: [],
+      croppedHighlights: [],
+      croppedUnderlines: [],
+      croppedCurrentStroke: null,
+      croppedCurrentMeasure: null,
+      croppedCurrentHighlight: null,
+      croppedCurrentUnderline: null,
       isFirstClick: true,
       horizontalStatistics: {}, // Stores horizontal statistics
       verticalStatistics: {},
@@ -767,9 +842,6 @@ export default {
       draggingCommentIndex: null, // Index of the comment being dragged
       dragOffset: { x: 0, y: 0 }, // Offset between the mouse and comment position
       scalingFactor: 1,
-      croppedStrokes: [],
-      croppedMeasurePoints: [],
-      croppedCurrentStroke: null,
     };
   },
   computed: {
@@ -838,7 +910,7 @@ export default {
       );
     },
     currentImage() {
-      return this.croppedImage || this.images[this.currentPage] || null;
+      return this.images[this.currentPage] || null;
     },
     totalPages() {
       return this.images.length;
@@ -1039,102 +1111,79 @@ export default {
 
       const { x, y, width, height } = this.currentSquare;
       const imageElement = this.$refs.image;
+      const naturalWidth = imageElement.naturalWidth;
+      const naturalHeight = imageElement.naturalHeight;
       const rect = imageElement.getBoundingClientRect();
+      const scaleX = naturalWidth / rect.width;
+      const scaleY = naturalHeight / rect.height;
 
-      // Calculate scaling factors
-      const scaleX = imageElement.naturalWidth / rect.width;
-      const scaleY = imageElement.naturalHeight / rect.height;
-
-      // Calculate actual crop dimensions in original image coordinates
       const scaledX = (x - rect.left) * scaleX;
-      const scaledY = (y - rect.top) * scaleY;
+      const scaledY = y * scaleY;
       const scaledWidth = width * scaleX;
       const scaledHeight = height * scaleY;
 
-      // Set popup dimensions to match the crop aspect ratio
-      const maxPopupWidth = window.innerWidth * 0.8;
-      const maxPopupHeight = window.innerHeight * 0.8;
-      const aspectRatio = scaledWidth / scaledHeight;
+      const popupWidth = (window.innerWidth * 2) / 3;
+      const popupHeight = (scaledHeight / scaledWidth) * popupWidth;
 
-      let popupWidth = scaledWidth;
-      let popupHeight = scaledHeight;
-
-      // Scale down if too large for viewport
-      if (popupWidth > maxPopupWidth) {
-        popupWidth = maxPopupWidth;
-        popupHeight = popupWidth / aspectRatio;
-      }
-      if (popupHeight > maxPopupHeight) {
-        popupHeight = maxPopupHeight;
-        popupWidth = popupHeight * aspectRatio;
-      }
-
-      // Create SVG with just the cropped portion
+      // Save the cropped SVG
       this.croppedSvg = `
-    <svg xmlns="http://www.w3.org/2000/svg" 
-         viewBox="0 0 ${scaledWidth} ${scaledHeight}"
-         width="${popupWidth}" 
-         height="${popupHeight}"
-         preserveAspectRatio="xMidYMid meet">
-      <image href="${this.currentImage}" 
-             x="0" 
-             y="0" 
-             width="${scaledWidth}" 
-             height="${scaledHeight}" 
-             transform="translate(${-scaledX} ${-scaledY})"/>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${scaledWidth} ${scaledHeight}" width="${popupWidth}" height="${popupHeight}">
+      <image href="${
+        this.currentImage
+      }" x="${-scaledX}" y="${-scaledY}" width="${naturalWidth}" height="${naturalHeight}" />
     </svg>
   `;
 
+      // Set popup dimensions
       this.popupDimensions = { width: popupWidth, height: popupHeight };
+
+      // Reset cropping state
       this.croppingStarted = false;
       this.currentSquare = null;
       this.startPoint = null;
 
+      // Generate and display the cropped PNG
       await this.generateCroppedPng();
     },
 
     async generateCroppedPng() {
-      if (!this.croppedSvg) return;
+      if (!this.croppedSvg) {
+        console.error("Cannot generate cropped PNG: No SVG available.");
+        return;
+      }
 
-      // Create a canvas with the exact crop dimensions
-      const { width, height } = this.popupDimensions;
-      const canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
+      // Create an image element from the SVG
+      const svgBlob = new Blob([this.croppedSvg], { type: "image/svg+xml" });
+      const svgUrl = URL.createObjectURL(svgBlob);
 
-      // Create temporary image to draw
       const img = new Image();
-      img.src = this.currentImage;
+      img.src = svgUrl;
 
-      await new Promise((resolve) => {
+      await new Promise((resolve, reject) => {
         img.onload = () => {
-          // Calculate source rectangle
-          const imageElement = this.$refs.image;
-          const rect = imageElement.getBoundingClientRect();
-          const scaleX = img.naturalWidth / rect.width;
-          const scaleY = img.naturalHeight / rect.height;
+          // Create a canvas to render the PNG
+          const canvas = document.createElement("canvas");
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext("2d");
 
-          const sx = (this.currentSquare.x - rect.left) * scaleX;
-          const sy = (this.currentSquare.y - rect.top) * scaleY;
-          const sw = this.currentSquare.width * scaleX;
-          const sh = this.currentSquare.height * scaleY;
+          // Draw the SVG onto the canvas
+          ctx.drawImage(img, 0, 0);
 
-          // Draw just the cropped portion
-          ctx.drawImage(
-            img,
-            sx,
-            sy,
-            sw,
-            sh, // source rectangle
-            0,
-            0,
-            width,
-            height // destination rectangle
-          );
+          // Convert the canvas to a PNG data URL
+          const pngUrl = canvas.toDataURL("image/png");
 
-          this.croppedImage = canvas.toDataURL("image/png");
+          // Display the PNG in the popup
+          this.croppedImage = pngUrl;
+
+          // Clean up
+          URL.revokeObjectURL(svgUrl);
           resolve();
+        };
+
+        img.onerror = (error) => {
+          console.error("Error loading SVG:", error);
+          reject(error);
         };
       });
     },
@@ -1198,7 +1247,7 @@ export default {
       this.currentPage = newPage;
     },
     selectTool(tool) {
-      if (!this.currentImage || !this.currentImage) {
+      if (!this.currentImage) {
         return;
       }
       this.currentTool = tool;
@@ -1579,9 +1628,6 @@ export default {
     },
 
     startCrop() {
-      if (this.croppedImage) {
-        return; // Exit the function if a cropped image is already displayed
-      }
       this.croppingStarted = true;
       this.cropButtonClicked = true;
       this.currentSquare = null;
@@ -1612,52 +1658,144 @@ export default {
       this.croppedImage = null;
     },
 
-    startAnnotating(event) {
-      if (this.croppedImage) {
-        // Handle annotations on the cropped image
-        const { x, y } = this.getCroppedMousePosition(event);
-        if (this.traceModeActive) {
-          this.croppedCurrentStroke = {
-            points: [{ x, y }],
-            color: this.generateRandomColor(),
+    getCroppedMousePosition(event) {
+      const container = this.$refs.croppedContainer;
+      const img = container.querySelector(".cropped-image");
+      const rect = container.getBoundingClientRect();
+
+      // Get scaling factors
+      const naturalWidth = img.naturalWidth;
+      const naturalHeight = img.naturalHeight;
+      const displayedWidth = img.clientWidth;
+      const displayedHeight = img.clientHeight;
+
+      const scaleX = naturalWidth / displayedWidth;
+      const scaleY = naturalHeight / displayedHeight;
+
+      return {
+        x: (event.clientX - rect.left) * scaleX,
+        y: (event.clientY - rect.top) * scaleY,
+      };
+    },
+
+    startCroppedAnnotation(event) {
+      if (!this.croppedImage) return;
+
+      const pos = this.getCroppedMousePosition(event);
+
+      if (this.highlightModeActive) {
+        this.croppedCurrentHighlight = {
+          start: pos,
+          current: pos,
+          style: this.getHighlightStyle(pos, pos),
+        };
+      } else if (this.underlineModeActive) {
+        this.croppedCurrentUnderline = {
+          start: pos,
+          current: pos.x,
+          style: this.getUnderlineStyle(pos, pos.x),
+        };
+      } else if (this.traceModeActive) {
+        this.croppedCurrentStroke = {
+          points: [pos],
+          color: this.generateRandomColor(),
+        };
+      } else if (this.measureModeActive) {
+        this.croppedCurrentMeasure = {
+          points: [pos],
+          lines: [],
+          angle: null,
+        };
+      }
+    },
+
+    handleCroppedAnnotation(event) {
+      if (!this.croppedImage) return;
+
+      const pos = this.getCroppedMousePosition(event);
+
+      if (this.croppedCurrentHighlight) {
+        this.croppedCurrentHighlight.current = pos;
+        this.croppedCurrentHighlight.style = this.getHighlightStyle(
+          this.croppedCurrentHighlight.start,
+          pos
+        );
+      } else if (this.croppedCurrentUnderline) {
+        this.croppedCurrentUnderline.current = pos.x;
+        this.croppedCurrentUnderline.style = this.getUnderlineStyle(
+          this.croppedCurrentUnderline.start,
+          pos.x
+        );
+      } else if (this.croppedCurrentStroke) {
+        this.croppedCurrentStroke.points.push(pos);
+      } else if (this.croppedCurrentMeasure) {
+        if (this.croppedCurrentMeasure.points.length < 3) {
+          this.croppedCurrentMeasure.points[1] = pos;
+          if (this.croppedCurrentMeasure.points.length === 2) {
+            this.croppedCurrentMeasure.lines = [
+              {
+                x1: this.croppedCurrentMeasure.points[0].x,
+                y1: this.croppedCurrentMeasure.points[0].y,
+                x2: pos.x,
+                y2: pos.y,
+              },
+            ];
+          }
+        }
+        if (this.croppedCurrentMeasure.points.length === 3) {
+          this.croppedCurrentMeasure.angle = this.calculateAngle(
+            ...this.croppedCurrentMeasure.points
+          );
+          this.croppedCurrentMeasure.lines.push({
+            x1: this.croppedCurrentMeasure.points[1].x,
+            y1: this.croppedCurrentMeasure.points[1].y,
+            x2: pos.x,
+            y2: pos.y,
+          });
+          this.croppedCurrentMeasure.text = {
+            x: this.croppedCurrentMeasure.points[1].x + 10,
+            y: this.croppedCurrentMeasure.points[1].y - 10,
           };
         }
-      } else if (this.measureModeActive) {
-        this.startAngleMeasurement(event);
-      } else if (this.traceModeActive) {
-        this.startDrawing(event);
       }
     },
 
-    annotateImage(event) {
-      if (this.croppedImage && this.croppedCurrentStroke) {
-        const { x, y } = this.getCroppedMousePosition(event);
-        this.croppedCurrentStroke.points.push({ x, y });
-      } else if (this.measureModeActive) {
-        this.moveAnglePoint(event);
-      } else if (this.traceModeActive) {
-        this.dynamicTrace(event);
-      }
-    },
-
-    endAnnotating() {
-      if (this.croppedImage && this.croppedCurrentStroke) {
+    endCroppedAnnotation() {
+      if (this.croppedCurrentHighlight) {
+        this.croppedHighlights.push({
+          style: this.croppedCurrentHighlight.style,
+        });
+        this.croppedCurrentHighlight = null;
+      } else if (this.croppedCurrentUnderline) {
+        this.croppedUnderlines.push({
+          style: this.croppedCurrentUnderline.style,
+        });
+        this.croppedCurrentUnderline = null;
+      } else if (this.croppedCurrentStroke) {
         this.croppedStrokes.push(this.croppedCurrentStroke);
         this.croppedCurrentStroke = null;
-      } else if (this.measureModeActive) {
-        this.stopAngleDragging();
-      } else if (this.traceModeActive) {
-        this.endDrawing();
+      } else if (this.croppedCurrentMeasure) {
+        if (this.croppedCurrentMeasure.points.length === 3) {
+          this.croppedMeasures.push(this.croppedCurrentMeasure);
+        }
+        this.croppedCurrentMeasure = null;
       }
     },
 
-    getCroppedMousePosition(event) {
-      const svg = event.target.closest("svg");
-
-      const rect = svg.getBoundingClientRect();
+    getHighlightStyle(start, end) {
       return {
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
+        left: `${Math.min(start.x, end.x)}px`,
+        top: `${Math.min(start.y, end.y)}px`,
+        width: `${Math.abs(end.x - start.x)}px`,
+        height: `${Math.abs(end.y - start.y)}px`,
+      };
+    },
+
+    getUnderlineStyle(start, currentX) {
+      return {
+        left: `${Math.min(start.x, currentX)}px`,
+        top: `${start.y}px`,
+        width: `${Math.abs(currentX - start.x)}px`,
       };
     },
     startDrawing(event) {
@@ -2507,8 +2645,6 @@ body {
   background-color: #f1f1f1;
   border-bottom: 1px solid #ddd;
   padding: 10px 20px;
-  z-index: 1001; /* Above the cropped popup */
-  position: relative; /* Ensure z-index works */
 }
 
 .logo {
@@ -2541,6 +2677,9 @@ body {
   position: absolute;
   top: 0;
   left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 .tool-message {
@@ -2567,8 +2706,6 @@ body {
   align-items: center;
   margin: 10px 0;
   gap: 10px;
-  z-index: 1001;
-  position: relative;
 }
 
 .page-input-container {
@@ -2603,9 +2740,23 @@ body {
   background-color: blue; /* Color of the underline */
   height: 2px; /* Height of the underline */
   pointer-events: none; /* Ensure it doesn't block mouse events */
-  z-index: 1000; /* Ensure it appears above other elements */
+  z-index: 1100; /* Ensure it appears above other elements */
+  pointer-events: none;
 }
 
+.cropped-image-container {
+  position: relative;
+  display: inline-block;
+}
+
+.cropped-annotation-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
 .cropping-rectangle {
   position: absolute;
   border: 2px dashed #007bff;
@@ -2758,20 +2909,9 @@ body {
   border: 1px solid #ccc;
   border-radius: 8px;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-  z-index: 1001; /* Higher than blurred background */
+  z-index: 1000; /* Ensure it appears above the blurred background */
   padding: 20px;
-  max-width: 90vw;
-  max-height: 90vh;
-  overflow: auto;
-}
-
-.pen-selection-popup,
-.statistics-popup,
-.length-popup {
-  z-index: 1100; /* Above the cropped popup and top bar */
-}
-.blurred-background {
-  z-index: 999; /* Below the cropped popup */
+  text-align: center;
 }
 
 .cropped-popup-content img {
@@ -3039,7 +3179,6 @@ button:hover {
   margin-bottom: 20px; /* Add margin between the pen and the angle text */
   transform-origin: left center; /* Rotate around the left edge */
   position: relative;
-  z-index: 100000;
 }
 
 .pen-nib {
