@@ -228,15 +228,9 @@
             :style="ul.style"
           ></div>
 
-          <!-- Traces -->
+          <!-- Dynamic Trace (while drawing) -->
           <svg class="drawing-layer">
-            <polyline
-              v-if="croppedCurrentStroke"
-              :points="formatPoints(croppedCurrentStroke.points)"
-              :stroke="croppedCurrentStroke.color"
-              stroke-width="2"
-              fill="none"
-            />
+            <!-- Cropped Traces -->
             <polyline
               v-for="(stroke, index) in croppedStrokes"
               :key="'cstroke-' + index"
@@ -245,10 +239,19 @@
               stroke-width="2"
               fill="none"
             />
-          </svg>
-
-          <!-- Measurements -->
-          <svg class="drawing-layer">
+            <!-- Dynamic trace while drawing -->
+            <polyline
+              v-if="
+                croppedCurrentStroke &&
+                croppedCurrentStroke.points &&
+                croppedCurrentStroke.points.length
+              "
+              :points="formatPoints(croppedCurrentStroke.points)"
+              :stroke="croppedCurrentStroke.color"
+              stroke-width="2"
+              fill="none"
+            />
+            <!-- Cropped Angles -->
             <g
               v-for="(measure, index) in croppedMeasures"
               :key="'cmeasure-' + index"
@@ -271,6 +274,45 @@
                 font-size="12"
               >
                 {{ measure.angle }}°
+              </text>
+            </g>
+            <!-- Dynamic angle lines while creating -->
+            <g
+              v-if="
+                croppedCurrentMeasure &&
+                croppedCurrentMeasure.points &&
+                croppedCurrentMeasure.points.length
+              "
+            >
+              <line
+                v-if="croppedCurrentMeasure.points.length >= 2"
+                :x1="croppedCurrentMeasure.points[0].x"
+                :y1="croppedCurrentMeasure.points[0].y"
+                :x2="croppedCurrentMeasure.points[1].x"
+                :y2="croppedCurrentMeasure.points[1].y"
+                stroke="blue"
+                stroke-width="2"
+              />
+              <line
+                v-if="croppedCurrentMeasure.points.length === 3"
+                :x1="croppedCurrentMeasure.points[1].x"
+                :y1="croppedCurrentMeasure.points[1].y"
+                :x2="croppedCurrentMeasure.points[2].x"
+                :y2="croppedCurrentMeasure.points[2].y"
+                stroke="blue"
+                stroke-width="2"
+              />
+              <text
+                v-if="
+                  croppedCurrentMeasure.points.length === 3 &&
+                  croppedCurrentMeasure.angle
+                "
+                :x="croppedCurrentMeasure.points[1].x + 10"
+                :y="croppedCurrentMeasure.points[1].y - 10"
+                fill="darkblue"
+                font-size="12"
+              >
+                {{ croppedCurrentMeasure.angle }}°
               </text>
             </g>
           </svg>
@@ -1661,21 +1703,14 @@ export default {
     getCroppedMousePosition(event) {
       const container = this.$refs.croppedContainer;
       const img = container.querySelector(".cropped-image");
-      const rect = container.getBoundingClientRect();
+      if (!img) return { x: 0, y: 0 };
+      const imgRect = img.getBoundingClientRect();
 
-      // Get scaling factors
-      const naturalWidth = img.naturalWidth;
-      const naturalHeight = img.naturalHeight;
-      const displayedWidth = img.clientWidth;
-      const displayedHeight = img.clientHeight;
+      // Calculate mouse position relative to the displayed image
+      const x = event.clientX - imgRect.left;
+      const y = event.clientY - imgRect.top;
 
-      const scaleX = naturalWidth / displayedWidth;
-      const scaleY = naturalHeight / displayedHeight;
-
-      return {
-        x: (event.clientX - rect.left) * scaleX,
-        y: (event.clientY - rect.top) * scaleY,
-      };
+      return { x, y };
     },
 
     startCroppedAnnotation(event) {
@@ -1683,24 +1718,56 @@ export default {
 
       const pos = this.getCroppedMousePosition(event);
 
-      if (this.highlightModeActive) {
-        this.croppedCurrentHighlight = {
-          start: pos,
-          current: pos,
-          style: this.getHighlightStyle(pos, pos),
-        };
-      } else if (this.underlineModeActive) {
-        this.croppedCurrentUnderline = {
-          start: pos,
-          current: pos.x,
-          style: this.getUnderlineStyle(pos, pos.x),
-        };
-      } else if (this.traceModeActive) {
+      // Highlight Mode
+      if (this.highlightModeActive || this.underlineModeActive) {
+        if (this.isFirstClick) {
+          // First click: Store start position
+          this.startPoint = pos;
+          this.isFirstClick = false;
+
+          if (this.highlightModeActive) {
+            this.croppedCurrentHighlight = {
+              start: pos,
+              current: pos,
+              style: this.getHighlightStyle(pos, pos),
+            };
+          } else if (this.underlineModeActive) {
+            this.croppedCurrentUnderline = {
+              start: pos,
+              current: pos.x,
+              style: this.getUnderlineStyle(pos, pos.x),
+            };
+          }
+        } else {
+          // Second click: Finalize annotation
+          const finalPos = this.getCroppedMousePosition(event);
+
+          if (this.highlightModeActive) {
+            this.croppedHighlights.push({
+              style: this.getHighlightStyle(this.startPoint, finalPos),
+            });
+            this.croppedCurrentHighlight = null;
+          } else if (this.underlineModeActive) {
+            this.croppedUnderlines.push({
+              style: this.getUnderlineStyle(this.startPoint, finalPos.x),
+            });
+            this.croppedCurrentUnderline = null;
+          }
+
+          this.isFirstClick = true;
+          this.highlightModeActive = false;
+          this.underlineModeActive = false;
+        }
+      }
+      // Trace Mode (keep existing trace logic)
+      else if (this.traceModeActive) {
         this.croppedCurrentStroke = {
           points: [pos],
           color: this.generateRandomColor(),
         };
-      } else if (this.measureModeActive) {
+      }
+      // Measure Mode (keep existing measure logic)
+      else if (this.measureModeActive) {
         this.croppedCurrentMeasure = {
           points: [pos],
           lines: [],
@@ -1711,24 +1778,36 @@ export default {
 
     handleCroppedAnnotation(event) {
       if (!this.croppedImage) return;
-
       const pos = this.getCroppedMousePosition(event);
 
-      if (this.croppedCurrentHighlight) {
-        this.croppedCurrentHighlight.current = pos;
+      // Dynamic highlight rectangle
+      if (
+        this.highlightModeActive &&
+        this.croppedCurrentHighlight &&
+        this.startPoint
+      ) {
         this.croppedCurrentHighlight.style = this.getHighlightStyle(
-          this.croppedCurrentHighlight.start,
+          this.startPoint,
           pos
         );
-      } else if (this.croppedCurrentUnderline) {
-        this.croppedCurrentUnderline.current = pos.x;
+      }
+      // Dynamic underline
+      else if (
+        this.underlineModeActive &&
+        this.croppedCurrentUnderline &&
+        this.startPoint
+      ) {
         this.croppedCurrentUnderline.style = this.getUnderlineStyle(
-          this.croppedCurrentUnderline.start,
+          this.startPoint,
           pos.x
         );
-      } else if (this.croppedCurrentStroke) {
+      }
+
+      // Only handle drag operations for trace and measure tools
+      if (this.croppedCurrentStroke) {
         this.croppedCurrentStroke.points.push(pos);
       } else if (this.croppedCurrentMeasure) {
+        // Existing measure logic
         if (this.croppedCurrentMeasure.points.length < 3) {
           this.croppedCurrentMeasure.points[1] = pos;
           if (this.croppedCurrentMeasure.points.length === 2) {
@@ -1761,20 +1840,12 @@ export default {
     },
 
     endCroppedAnnotation() {
-      if (this.croppedCurrentHighlight) {
-        this.croppedHighlights.push({
-          style: this.croppedCurrentHighlight.style,
-        });
-        this.croppedCurrentHighlight = null;
-      } else if (this.croppedCurrentUnderline) {
-        this.croppedUnderlines.push({
-          style: this.croppedCurrentUnderline.style,
-        });
-        this.croppedCurrentUnderline = null;
-      } else if (this.croppedCurrentStroke) {
+      // Only handle trace and measure tools
+      if (this.croppedCurrentStroke) {
         this.croppedStrokes.push(this.croppedCurrentStroke);
         this.croppedCurrentStroke = null;
-      } else if (this.croppedCurrentMeasure) {
+      }
+      if (this.croppedCurrentMeasure) {
         if (this.croppedCurrentMeasure.points.length === 3) {
           this.croppedMeasures.push(this.croppedCurrentMeasure);
         }
