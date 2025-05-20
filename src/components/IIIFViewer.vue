@@ -199,6 +199,7 @@
             alt="Cropped"
             class="cropped-image"
             draggable="false"
+            style="display: block; width: 100%; height: auto"
           />
 
           <!-- Annotation Layers -->
@@ -229,7 +230,19 @@
           ></div>
 
           <!-- Dynamic Trace (while drawing) -->
-          <svg class="drawing-layer">
+          <svg
+            class="drawing-layer"
+            :width="popupDimensions.width"
+            :height="popupDimensions.height"
+            style="
+              position: absolute;
+              top: 0;
+              left: 0;
+              width: 100%;
+              height: 100%;
+              z-index: 2;
+            "
+          >
             <!-- Cropped Traces -->
             <polyline
               v-for="(stroke, index) in croppedStrokes"
@@ -252,80 +265,103 @@
               fill="none"
             />
             <!-- Cropped Angles -->
-            <g
-              v-for="(measure, index) in croppedMeasures"
-              :key="'cmeasure-' + index"
-            >
-              <line
-                v-for="(line, li) in measure.lines"
-                :key="'cline-' + li"
-                :x1="line.x1"
-                :y1="line.y1"
-                :x2="line.x2"
-                :y2="line.y2"
-                stroke="blue"
-                stroke-width="2"
+            <!-- Finalized cropped angles -->
+            <g v-if="croppedMeasurePoints.length">
+              <circle
+                v-for="(point, index) in croppedMeasurePoints"
+                :key="'cmeasure-point-' + index"
+                :cx="point.x"
+                :cy="point.y"
+                r="5"
+                fill="red"
+                @mousedown.stop="croppedDraggingPoint = index"
               />
-              <text
-                v-if="measure.angle"
-                :x="measure.text.x"
-                :y="measure.text.y"
-                fill="darkblue"
-                font-size="12"
-              >
-                {{ measure.angle }}°
-              </text>
-            </g>
-            <!-- Dynamic angle lines while creating -->
-            <g
-              v-if="
-                croppedCurrentMeasure &&
-                croppedCurrentMeasure.points &&
-                croppedCurrentMeasure.points.length
-              "
-            >
               <line
-                v-if="croppedCurrentMeasure.points.length >= 2"
-                :x1="croppedCurrentMeasure.points[0].x"
-                :y1="croppedCurrentMeasure.points[0].y"
-                :x2="croppedCurrentMeasure.points[1].x"
-                :y2="croppedCurrentMeasure.points[1].y"
+                v-if="croppedMeasurePoints.length >= 2"
+                :x1="croppedMeasurePoints[0].x"
+                :y1="croppedMeasurePoints[0].y"
+                :x2="croppedMeasurePoints[1].x"
+                :y2="croppedMeasurePoints[1].y"
                 stroke="blue"
                 stroke-width="2"
               />
               <line
-                v-if="croppedCurrentMeasure.points.length === 3"
-                :x1="croppedCurrentMeasure.points[1].x"
-                :y1="croppedCurrentMeasure.points[1].y"
-                :x2="croppedCurrentMeasure.points[2].x"
-                :y2="croppedCurrentMeasure.points[2].y"
+                v-if="croppedMeasurePoints.length === 3"
+                :x1="croppedMeasurePoints[1].x"
+                :y1="croppedMeasurePoints[1].y"
+                :x2="croppedMeasurePoints[2].x"
+                :y2="croppedMeasurePoints[2].y"
                 stroke="blue"
                 stroke-width="2"
               />
               <text
                 v-if="
-                  croppedCurrentMeasure.points.length === 3 &&
-                  croppedCurrentMeasure.angle
+                  croppedMeasurePoints.length === 3 && croppedCalculatedAngle
                 "
-                :x="croppedCurrentMeasure.points[1].x + 10"
-                :y="croppedCurrentMeasure.points[1].y - 10"
+                :x="croppedMeasurePoints[1].x + 10"
+                :y="croppedMeasurePoints[1].y - 10"
                 fill="darkblue"
                 font-size="12"
               >
-                {{ croppedCurrentMeasure.angle }}°
+                {{ croppedCalculatedAngle }}°
               </text>
+            </g>
+            <!-- Finalized angles -->
+            <g
+              v-for="(measure, index) in croppedMeasures"
+              :key="'cmeasure-' + index"
+            >
+              <line
+                v-if="measure.points.length >= 2"
+                :x1="measure.points[0].x"
+                :y1="measure.points[0].y"
+                :x2="measure.points[1].x"
+                :y2="measure.points[1].y"
+                stroke="blue"
+                stroke-width="2"
+              />
+              <line
+                v-if="measure.points.length === 3"
+                :x1="measure.points[1].x"
+                :y1="measure.points[1].y"
+                :x2="measure.points[2].x"
+                :y2="measure.points[2].y"
+                stroke="blue"
+                stroke-width="2"
+              />
+              <text
+                v-if="measure.points.length === 3 && measure.angle"
+                :x="measure.points[1].x + 10"
+                :y="measure.points[1].y - 10"
+                fill="darkblue"
+                font-size="12"
+              >
+                {{ measure.angle }}°
+              </text>
+              <circle
+                v-for="(point, pi) in measure.points"
+                :key="'cmeasure-final-point-' + pi"
+                :cx="point.x"
+                :cy="point.y"
+                r="5"
+                fill="red"
+                pointer-events:
+                all
+              />
             </g>
           </svg>
         </div>
         <div class="popup-actions">
           <button @click="saveCroppedImageAsPNG">Save as PNG</button>
           <button @click="saveCroppedImageAsSVG">Save as SVG</button>
+          <button @click="saveCroppedImage">Save with Annotations</button>
           <button @click="closeCroppedPopup">Close</button>
         </div>
       </div>
     </div>
 
     <!-- Horizontal Bands Popup -->
+    <!-- filepath: /Users/mohamedbasuony/quill_1.0/src/components/IIIFViewer.vue -->
     <div v-if="showHorizontalPopup" class="length-popup">
       <div class="length-popup-content">
         <h3>Select Horizontal Measurement Type</h3>
@@ -335,6 +371,10 @@
           <option value="interlinear">Interlinear Spaces</option>
           <option value="upperMargin">Upper Margin</option>
           <option value="lowerMargin">Lower Margin</option>
+          <option value="lineHeight">Line Height</option>
+          <!-- New -->
+          <option value="minimumHeight">Minimum Height</option>
+          <!-- New -->
         </select>
         <div class="color-preview">
           <div style="padding: 10px; text-align: center">
@@ -377,13 +417,31 @@
               style="margin: 0 auto"
             ></div>
           </div>
+          <div style="padding: 10px; text-align: center">
+            <div style="font-size: 12px; margin-bottom: 10px">Line Height</div>
+            <div
+              :style="{ backgroundColor: measurementColors.lineHeight }"
+              class="color-box"
+              style="margin: 0 auto"
+            ></div>
+          </div>
+          <div style="padding: 10px; text-align: center">
+            <div style="font-size: 12px; margin-bottom: 10px">
+              Minimum Height
+            </div>
+            <div
+              :style="{ backgroundColor: measurementColors.minimumHeight }"
+              class="color-box"
+              style="margin: 0 auto"
+            ></div>
+          </div>
         </div>
         <button @click="confirmLengthMeasurement">Confirm</button>
         <button @click="hideLengthPopup">Cancel</button>
       </div>
     </div>
-
     <!-- Vertical Bands Popup -->
+    <!-- filepath: /Users/mohamedbasuony/quill_1.0/src/components/IIIFViewer.vue -->
     <div v-if="showVerticalPopup" class="length-popup">
       <div class="length-popup-content">
         <h3>Select Vertical Measurement Type</h3>
@@ -394,7 +452,7 @@
         <div class="color-preview">
           <div style="padding: 10px; text-align: center">
             <div style="font-size: 12px; margin-bottom: 10px">
-              InternalMargin
+              Internal Margin
             </div>
             <div
               :style="{ backgroundColor: measurementColors.internalMargin }"
@@ -404,7 +462,7 @@
           </div>
           <div style="padding: 10px; text-align: center">
             <div style="font-size: 12px; margin-bottom: 10px">
-              IntercolumnSpaces
+              Intercolumn Spaces
             </div>
             <div
               :style="{ backgroundColor: measurementColors.intercolumnSpaces }"
@@ -581,7 +639,9 @@
             measurement.label === "descenders" ||
             measurement.label === "interlinear" ||
             measurement.label === "upperMargin" ||
-            measurement.label === "lowerMargin"
+            measurement.label === "lowerMargin" ||
+            measurement.label === "minimumHeight" ||
+            measurement.label === "lineHeight"
               ? measurement.height
               : measurement.width
           }}px
@@ -754,27 +814,6 @@
           position: 'absolute',
         }"
       ></div>
-
-      <!-- Cropped Image Pop-up -->
-      <svg
-        :width="popupDimensions.width"
-        :height="popupDimensions.height"
-        @mousedown="startTrace"
-        @mousemove="trace"
-        @mouseup="endTrace"
-        @mouseleave="endTrace"
-        xmlns="http://www.w3.org/2000/svg"
-        class="interactive-svg"
-      >
-        <!-- Render cropped image -->
-        <foreignObject
-          :width="popupDimensions.width"
-          :height="popupDimensions.height"
-          draggable="false"
-        >
-          <div v-html="croppedSvg"></div>
-        </foreignObject>
-      </svg>
     </div>
   </div>
 </template>
@@ -809,6 +848,9 @@ export default {
       croppedMeasures: [],
       croppedHighlights: [],
       croppedUnderlines: [],
+      croppedMeasurePoints: [],
+      croppedCalculatedAngle: null,
+      croppedDraggingPoint: -1,
       croppedCurrentStroke: null,
       croppedCurrentMeasure: null,
       croppedCurrentHighlight: null,
@@ -844,6 +886,8 @@ export default {
         lowerMargin: "rgba(128, 0, 128, 0.5)", // Transparent purple
         internalMargin: "rgba(0, 255, 255, 0.5)", // Transparent cyan
         intercolumnSpaces: "rgba(255, 0, 255, 0.5)", // Transparent magenta
+        lineHeight: "rgba(100, 100, 255, 0.5)", // New: Transparent blue-purple
+        minimumHeight: "rgba(255, 100, 100, 0.5)", // New: Transparent red-pink
       },
       statistics: {
         averageVertical: 0,
@@ -861,6 +905,8 @@ export default {
         lowerMargin: {},
         internalMargin: {},
         intercolumnSpaces: {},
+        lineHeight: {}, // New
+        minimumHeight: {}, // New
       },
       currentStroke: null,
       dynamicTracePath: "",
@@ -1766,13 +1812,36 @@ export default {
           color: this.generateRandomColor(),
         };
       }
+
       // Measure Mode (keep existing measure logic)
+      // Measure Mode
       else if (this.measureModeActive) {
-        this.croppedCurrentMeasure = {
-          points: [pos],
-          lines: [],
-          angle: null,
-        };
+        // If dragging a point, don't add a new one
+        if (this.croppedDraggingPoint !== -1) return;
+
+        // If already 3 points, clicking starts a new angle
+        if (this.croppedMeasurePoints.length === 3) {
+          // Save the finished angle
+          this.croppedMeasures.push({
+            points: [...this.croppedMeasurePoints],
+            angle: this.croppedCalculatedAngle,
+          });
+          // Start new angle
+          this.croppedMeasurePoints = [];
+          this.croppedCalculatedAngle = null;
+        }
+
+        // Add a new point
+        this.croppedMeasurePoints.push({ x: pos.x, y: pos.y });
+
+        // If 3 points, calculate angle
+        if (this.croppedMeasurePoints.length === 3) {
+          this.croppedCalculatedAngle = this.calculateAngle(
+            this.croppedMeasurePoints[0],
+            this.croppedMeasurePoints[1],
+            this.croppedMeasurePoints[2]
+          );
+        }
       }
     },
 
@@ -1806,35 +1875,25 @@ export default {
       // Only handle drag operations for trace and measure tools
       if (this.croppedCurrentStroke) {
         this.croppedCurrentStroke.points.push(pos);
-      } else if (this.croppedCurrentMeasure) {
-        // Existing measure logic
-        if (this.croppedCurrentMeasure.points.length < 3) {
-          this.croppedCurrentMeasure.points[1] = pos;
-          if (this.croppedCurrentMeasure.points.length === 2) {
-            this.croppedCurrentMeasure.lines = [
-              {
-                x1: this.croppedCurrentMeasure.points[0].x,
-                y1: this.croppedCurrentMeasure.points[0].y,
-                x2: pos.x,
-                y2: pos.y,
-              },
-            ];
-          }
-        }
-        if (this.croppedCurrentMeasure.points.length === 3) {
-          this.croppedCurrentMeasure.angle = this.calculateAngle(
-            ...this.croppedCurrentMeasure.points
-          );
-          this.croppedCurrentMeasure.lines.push({
-            x1: this.croppedCurrentMeasure.points[1].x,
-            y1: this.croppedCurrentMeasure.points[1].y,
-            x2: pos.x,
-            y2: pos.y,
-          });
-          this.croppedCurrentMeasure.text = {
-            x: this.croppedCurrentMeasure.points[1].x + 10,
-            y: this.croppedCurrentMeasure.points[1].y - 10,
+      } // Dragging a cropped angle point
+      if (
+        this.measureModeActive &&
+        this.croppedDraggingPoint !== -1 &&
+        this.croppedMeasurePoints.length === 3
+      ) {
+        const pos = this.getCroppedMousePosition(event);
+        if (this.croppedMeasurePoints[this.croppedDraggingPoint]) {
+          this.croppedMeasurePoints[this.croppedDraggingPoint] = {
+            x: pos.x,
+            y: pos.y,
           };
+          if (this.croppedMeasurePoints.length === 3) {
+            this.croppedCalculatedAngle = this.calculateAngle(
+              this.croppedMeasurePoints[0],
+              this.croppedMeasurePoints[1],
+              this.croppedMeasurePoints[2]
+            );
+          }
         }
       }
     },
@@ -1845,14 +1904,32 @@ export default {
         this.croppedStrokes.push(this.croppedCurrentStroke);
         this.croppedCurrentStroke = null;
       }
-      if (this.croppedCurrentMeasure) {
-        if (this.croppedCurrentMeasure.points.length === 3) {
-          this.croppedMeasures.push(this.croppedCurrentMeasure);
-        }
-        this.croppedCurrentMeasure = null;
+      if (this.measureModeActive && this.croppedDraggingPoint !== -1) {
+        this.croppedDraggingPoint = -1;
+      }
+
+      if (
+        this.measureModeActive &&
+        this.croppedMeasurePoints.length === 3 &&
+        this.croppedDraggingPoint === -1
+      ) {
+        // Wait for a new click to start a new angle
+        this.croppedMeasurePoints = [];
+        this.croppedCalculatedAngle = null;
       }
     },
-
+    findNearestCroppedPoint(x, y, threshold = 10) {
+      let nearestIdx = -1;
+      let minDist = Infinity;
+      this.croppedMeasurePoints.forEach((pt, idx) => {
+        const dist = Math.hypot(x - pt.x, y - pt.y);
+        if (dist < threshold && dist < minDist) {
+          minDist = dist;
+          nearestIdx = idx;
+        }
+      });
+      return nearestIdx;
+    },
     getHighlightStyle(start, end) {
       return {
         left: `${Math.min(start.x, end.x)}px`,
@@ -1993,114 +2070,30 @@ export default {
         pointIndex: nearestPointIndex,
       };
     },
-
     async saveCroppedImage() {
-      if (!this.croppedSvg) {
-        console.error("Cannot save: No SVG available.");
+      const container = this.$refs.croppedContainer;
+      if (!container) {
+        console.error("Cropped container not found.");
         return;
       }
-      // Save the SVG alone
-      const svgBlob = new Blob([this.croppedSvg], { type: "image/svg+xml" });
-      const svgUrl = URL.createObjectURL(svgBlob);
-      const svgLink = document.createElement("a");
-      svgLink.href = svgUrl;
-      svgLink.download = "cropped-image.svg";
-      svgLink.click();
-      URL.revokeObjectURL(svgUrl);
-
-      // Create a canvas to combine the cropped image and annotations
-      const canvas = document.createElement("canvas");
-      const { width, height } = this.popupDimensions;
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-
-      // Load the cropped image from the SVG
-      const img = new Image();
-      img.src = this.croppedImage; // Ensure this.croppedImage contains the correct image data (e.g., a data URL or a valid image URL)
 
       try {
-        await new Promise((resolve, reject) => {
-          img.onload = () => {
-            // Clear the canvas before drawing
-            ctx.clearRect(0, 0, width, height);
-
-            // Draw the cropped image onto the canvas
-            ctx.drawImage(img, 0, 0, width, height);
-
-            // Draw the annotations (traces and angle measurements)
-            this.strokes.forEach((stroke) => {
-              ctx.strokeStyle = stroke.color;
-              ctx.lineWidth = 2;
-              ctx.beginPath();
-              stroke.points.forEach((point, index) => {
-                if (index === 0) {
-                  ctx.moveTo(point.x, point.y);
-                } else {
-                  ctx.lineTo(point.x, point.y);
-                }
-              });
-              ctx.stroke();
-            });
-
-            // Draw angle measurements
-            this.measurePoints.forEach((point) => {
-              ctx.fillStyle = "red";
-              ctx.beginPath();
-              ctx.arc(point.x, point.y, 5, 0, 2 * Math.PI);
-              ctx.fill();
-            });
-
-            if (this.measurePoints.length >= 2) {
-              const p1 = this.measurePoints[0];
-              const p2 = this.measurePoints[1];
-              ctx.strokeStyle = "blue";
-              ctx.lineWidth = 2;
-              ctx.beginPath();
-              ctx.moveTo(p1.x, p1.y);
-              ctx.lineTo(p2.x, p2.y);
-              ctx.stroke();
-            }
-
-            if (this.measurePoints.length === 3) {
-              const p2 = this.measurePoints[1];
-              const p3 = this.measurePoints[2];
-              ctx.strokeStyle = "blue";
-              ctx.lineWidth = 2;
-              ctx.beginPath();
-              ctx.moveTo(p2.x, p2.y);
-              ctx.lineTo(p3.x, p3.y);
-              ctx.stroke();
-
-              // Display the angle
-              ctx.fillStyle = "black";
-              ctx.font = "12px Arial";
-              ctx.fillText(`${this.calculatedAngle}°`, p2.x + 10, p2.y - 10);
-            }
-
-            // Convert the canvas to a PNG and trigger download
-            canvas.toBlob((blob) => {
-              if (!blob) {
-                reject(new Error("Canvas toBlob failed"));
-                return;
-              }
-              const pngUrl = URL.createObjectURL(blob);
-              const pngLink = document.createElement("a");
-              pngLink.href = pngUrl;
-              pngLink.download = "cropped-image-with-annotations.png";
-              pngLink.click();
-              URL.revokeObjectURL(pngUrl);
-              resolve();
-            }, "image/png");
-          };
-
-          img.onerror = (error) => {
-            console.error("Error loading cropped image:", error);
-            reject(error);
-          };
+        // Use html2canvas to capture the container with annotations
+        const canvas = await html2canvas(container, {
+          useCORS: true, // Handle cross-origin images
+          logging: true, // Debugging logs
+          backgroundColor: null, // Transparent background
+          scale: 2, // Higher resolution
         });
+
+        // Convert canvas to PNG and trigger download
+        const dataUrl = canvas.toDataURL("image/png");
+        const link = document.createElement("a");
+        link.href = dataUrl;
+        link.download = "cropped-with-annotations.png";
+        link.click();
       } catch (error) {
-        console.error("Error in saveCroppedImage:", error);
+        console.error("Error saving cropped image with annotations:", error);
       }
     },
 
@@ -2236,6 +2229,8 @@ export default {
         "interlinear",
         "upperMargin",
         "lowerMargin",
+        "lineHeight", // New
+        "minimumHeight", // New
       ];
       horizontalTypes.forEach((type) => {
         if (this.lengthMeasurements[type]) {
@@ -2412,6 +2407,8 @@ export default {
         "interlinear",
         "upperMargin",
         "lowerMargin",
+        "lineHeight", // New
+        "minimumHeight", // New
       ];
       const verticalTypes = ["internalMargin", "intercolumnSpaces"];
       const statistics = {};
@@ -2462,6 +2459,8 @@ export default {
         "interlinear",
         "upperMargin",
         "lowerMargin",
+        "lineHeight", // New
+        "minimumHeight", // New
       ];
       const verticalTypes = ["internalMargin", "intercolumnSpaces"];
       const statistics = {};
@@ -2515,6 +2514,8 @@ export default {
         "interlinear",
         "upperMargin",
         "lowerMargin",
+        "lineHeight", // New
+        "minimumHeight", // New
       ];
       const statistics = {};
 
@@ -2558,6 +2559,8 @@ export default {
         "interlinear",
         "upperMargin",
         "lowerMargin",
+        "lineHeight", // New
+        "minimumHeight", // New
       ];
       let horizontalLengths = [];
 
@@ -2678,6 +2681,8 @@ export default {
             "interlinear",
             "upperMargin",
             "lowerMargin",
+            "lineHeight", // New
+            "minimumHeight", // New
           ].includes(type)
         ) {
           this.horizontalStatistics[type] = stats;
