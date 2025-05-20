@@ -115,8 +115,18 @@
               class="pen-preview"
               :style="{ transform: `rotate(${-angle}deg)` }"
             >
-              <!-- Simulate the pen nib -->
-              <div class="pen-nib"></div>
+              <svg width="40" height="20">
+                <ellipse
+                  cx="20"
+                  cy="10"
+                  rx="12"
+                  ry="4"
+                  :fill="selectedPenAngle === angle ? '#007bff' : '#555'"
+                  :stroke="selectedPenAngle === angle ? '#007bff' : '#333'"
+                  stroke-width="2"
+                  :transform="`rotate(${-angle}, 20, 10)`"
+                />
+              </svg>
             </div>
             <span class="pen-angle-text">{{ angle }}°</span>
           </div>
@@ -3249,12 +3259,13 @@ button:hover {
 }
 
 .pen-preview {
-  width: 30px;
-  height: 10px;
-  background-color: grey; /* Pen color */
-  margin-bottom: 20px; /* Add margin between the pen and the angle text */
-  transform-origin: left center; /* Rotate around the left edge */
-  position: relative;
+  width: 40px;
+  height: 20px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
 }
 
 .pen-nib {
