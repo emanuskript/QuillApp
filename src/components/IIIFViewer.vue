@@ -2273,6 +2273,8 @@ export default {
         "lowerMargin",
         "internalMargin",
         "intercolumnSpaces",
+        "lineHeight", // New
+        "minimumHeight", // New
       ];
       allTypes.forEach((type) => {
         if (this.lengthMeasurements[type]) {
@@ -2712,6 +2714,9 @@ export default {
 </script>
 
 <style scoped>
+* {
+  font-family: "Arial", "Helvetica", sans-serif !important;
+}
 .viewer-container {
   display: flex;
   flex-direction: column;
