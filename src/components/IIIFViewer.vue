@@ -1239,7 +1239,7 @@ export default {
       this.croppingStarted = false;
       this.currentSquare = null;
       this.startPoint = null;
-
+      this.cropButtonClicked = false;
       // Generate and display the cropped PNG
       await this.generateCroppedPng();
     },
@@ -1420,7 +1420,11 @@ export default {
         return; // Exit the function early if no relevant tool is active
       }
 
-      if (this.croppingStarted && this.cropButtonClicked) {
+      if (
+        this.croppingStarted &&
+        this.cropButtonClicked &&
+        !this.croppedImage // Only allow cropping if popup is NOT visible
+      ) {
         const { x, y } = this.getMousePosition(event);
         this.startPoint = { x, y };
         this.currentSquare = { x, y, width: 0, height: 0 };
@@ -1524,7 +1528,12 @@ export default {
         return; // Exit the function early if no relevant tool is active
       }
 
-      if (this.startPoint && this.cropButtonClicked) {
+      if (
+        this.startPoint &&
+        this.cropButtonClicked &&
+        this.croppingStarted &&
+        !this.croppedImage
+      ) {
         const { x, y } = this.getMousePosition(event);
         console.log("Mouse position:", this.startPoint);
         this.currentSquare = {
@@ -1547,6 +1556,18 @@ export default {
         const { x } = this.getMousePosition(event);
         this.currentUnderline.width = Math.abs(x - this.startPoint.x);
         this.currentUnderline.x = Math.min(x, this.startPoint.x);
+      }
+
+      if (this.lengthMeasurementActive && this.startPoint) {
+        const { x, y } = this.getMousePosition(event);
+        this.currentSquare = {
+          x: Math.min(x, this.startPoint.x),
+          y: Math.min(y, this.startPoint.y),
+          width: Math.abs(x - this.startPoint.x),
+          height: Math.abs(y - this.startPoint.y),
+          color: this.measurementColors[this.selectedMeasurement],
+          label: this.selectedMeasurement,
+        };
       }
 
       // Trace Mode
@@ -1602,7 +1623,8 @@ export default {
         }
       } else if (
         (this.croppingStarted || this.currentSquare) &&
-        this.cropButtonClicked
+        this.cropButtonClicked &&
+        !this.croppedImage // Only allow cropping if popup is NOT visible
       ) {
         const { x, y, width, height } = this.currentSquare;
         const imageElement = this.$refs.image;
@@ -1651,6 +1673,7 @@ export default {
       </svg>
     `;
         this.croppingStarted = false;
+        this.cropButtonClicked = false;
         this.currentSquare = null;
         this.startPoint = null;
       }
@@ -2311,6 +2334,7 @@ export default {
 
     startLengthMeasurement() {
       this.lengthMeasurementActive = true; // Activate length measurement mode
+      this.isMeasuring = true;
       this.$refs.viewer.addEventListener("mousedown", this.startLength);
       this.$refs.viewer.addEventListener("mousemove", this.updateLength);
     },
@@ -2320,7 +2344,7 @@ export default {
 
       const { x, y } = this.getMousePosition(event);
 
-      if (!this.croppingStarted) {
+      if (!this.startPoint) {
         this.startPoint = { x, y };
         this.currentSquare = {
           x: x,
@@ -2330,7 +2354,6 @@ export default {
           color: this.measurementColors[this.selectedMeasurement], // Set color
           label: this.selectedMeasurement,
         };
-        this.croppingStarted = true;
       } else {
         // Second click: Finalize the measurement
         const currentLabel = this.selectedMeasurement;
@@ -2354,18 +2377,13 @@ export default {
         // Reset state
         this.startPoint = null;
         this.currentSquare = null;
-        this.croppingStarted = false;
         this.lengthMeasurementActive = false;
+        this.isMeasuring = false;
       }
     },
 
     updateLength(event) {
-      if (
-        !this.lengthMeasurementActive ||
-        !this.croppingStarted ||
-        !this.startPoint
-      )
-        return;
+      if (!this.lengthMeasurementActive || !this.startPoint) return;
 
       const { x, y } = this.getMousePosition(event);
 
