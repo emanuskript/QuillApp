@@ -622,8 +622,32 @@
           position: 'absolute',
         }"
       >
-        <div class="length-label">
-          {{ currentSquare.label }}: {{ currentSquare.height }}px
+        <div
+          class="length-label draggable-label"
+          :style="{
+            left: (labelPositions['dynamic']?.x ?? 15) + 'px',
+            top: labelPositions['dynamic']?.y ?? '50%',
+            position: 'absolute',
+            cursor: draggedLabelIndex === 'dynamic' ? 'grabbing' : 'grab',
+            backgroundColor: 'white',
+            zIndex: 2000,
+            userSelect: 'none',
+            pointerEvents: 'auto',
+          }"
+          @mousedown.stop="startLabelDrag('dynamic', $event, currentSquare)"
+        >
+          {{ currentSquare.label }}:
+          {{
+            currentSquare.label === "ascenders" ||
+            currentSquare.label === "descenders" ||
+            currentSquare.label === "interlinear" ||
+            currentSquare.label === "upperMargin" ||
+            currentSquare.label === "lowerMargin" ||
+            currentSquare.label === "minimumHeight" ||
+            currentSquare.label === "lineHeight"
+              ? currentSquare.height
+              : currentSquare.width
+          }}px
         </div>
       </div>
 
@@ -642,7 +666,20 @@
           border: '1px solid black', // Add a border for better visibility
         }"
       >
-        <div class="length-label">
+        <div
+          class="length-label draggable-label"
+          :style="{
+            left: (labelPositions[measurement.id]?.x ?? 15) + 'px',
+            top: labelPositions[measurement.id]?.y ?? '50%',
+            position: 'absolute',
+            cursor: draggedLabelIndex === measurement.id ? 'grabbing' : 'grab',
+            backgroundColor: 'white',
+            zIndex: 2000,
+            userSelect: 'none',
+            pointerEvents: 'auto',
+          }"
+          @mousedown.stop="startLabelDrag(measurement.id, $event, measurement)"
+        >
           {{ measurement.label }}:
           {{
             measurement.label === "ascenders" ||
@@ -837,6 +874,24 @@ export default {
       required: true,
     },
   },
+
+  mounted() {
+    this._onLabelDragMove = (e) => {
+      if (this.draggedLabelIndex !== null) {
+        let measurement = null;
+        if (this.draggedLabelIndex === "dynamic") {
+          measurement = this.currentSquare;
+        } else {
+          measurement = this.currentPageLengthMeasurements.find(
+            (m) => m.id === this.draggedLabelIndex
+          );
+        }
+        if (measurement) {
+          this.dragLabel(this.draggedLabelIndex, e, measurement);
+        }
+      }
+    };
+  },
   data() {
     return {
       penWidth: 3, // Default pen width
@@ -847,6 +902,9 @@ export default {
       isCreatingAngle: false, // Track if a new angle is being created
       activeAngleIndex: -1,
       showPenSelectionPopup: false,
+      draggedLabelIndex: null,
+      labelDragOffset: { x: 0, y: 0 },
+      labelPositions: {}, // { [measurementId]: { x, y } }
       showClearDropdown: false,
       penAngles: [0, 25, 30, 50, 80], // Available pen angles
       selectedPenAngle: null, // Currently selected pen angle
@@ -1678,6 +1736,31 @@ export default {
         this.startPoint = null;
       }
     },
+    startLabelDrag(id, event) {
+      this.draggedLabelIndex = id;
+      const pos = this.labelPositions[id] || { x: 15, y: 0 };
+      this.labelDragOffset = {
+        x: event.clientX - pos.x,
+        y: event.clientY - pos.y,
+      };
+      window.addEventListener("mousemove", this._onLabelDragMove);
+      window.addEventListener("mouseup", this.stopLabelDrag);
+    },
+
+    dragLabel(id, event) {
+      if (this.draggedLabelIndex !== id) return;
+      const x = event.clientX - this.labelDragOffset.x;
+      const y = event.clientY - this.labelDragOffset.y;
+      this.labelPositions[id] = { x, y };
+    },
+
+    _onLabelDragMove: null, // will be set in mounted
+
+    stopLabelDrag() {
+      this.draggedLabelIndex = null;
+      window.removeEventListener("mousemove", this._onLabelDragMove);
+      window.removeEventListener("mouseup", this.stopLabelDrag);
+    },
 
     startComment(event) {
       const { x, y } = this.getMousePosition(event);
@@ -2372,6 +2455,7 @@ export default {
           type: "length",
           height: this.currentSquare.height,
           width: this.currentSquare.width,
+          id: Date.now() + Math.random(), // Unique ID
         });
 
         // Reset state
@@ -3166,6 +3250,14 @@ button:hover {
 .calculate-dropdown div {
   padding: 8px 16px;
   cursor: pointer;
+}
+
+.draggable-label {
+  cursor: grab;
+  user-select: none;
+}
+.draggable-label:active {
+  cursor: grabbing;
 }
 
 .calculate-dropdown div:hover {
