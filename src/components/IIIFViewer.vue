@@ -991,6 +991,14 @@ export default {
       currentUnderline: null, // Tracks current underline line being drawn
       currentHighlight: null, // Tracks current highlight box being drawn
       showCommentInput: false,
+      currentCommentText: "",
+      currentCommentPosition: null,
+      comments: [],
+      isMeasuring: false,
+      editingAnnotationIndex: -1,
+      draggingCommentIndex: null, // Index of the comment being dragged
+      dragOffset: { x: 0, y: 0 }, // Offset between the mouse and comment position
+      scalingFactor: 1,
     };
   },
   computed: {
