@@ -1,295 +1,784 @@
+<!-- /src/components/IIIFViewer.vue -->
 <template>
   <div class="viewer-container">
-    <!-- Top Bar / Toolbar -->
-    <Toolbar
-      :toolStates="{
-        highlight: highlightModeActive,
-        underline: underlineModeActive,
-        comment: commentModeActive,
-        trace: traceModeActive,
-        measure: measureModeActive
-      }"
-      :showCalculateDropdown="showCalculateDropdown"
-      :showClearDropdown="showClearDropdown"
-      :toolMessage="toolMessage"
-      @select-tool="selectTool"
-      @show-length-popup="showLengthPopup"
-      @toggle-calculate-dropdown="toggleCalculateDropdown"
-      @calculate-current-page="calculateCurrentPage"
-      @calculate-entire-document="calculateEntireDocument"
-      @calculate-angle-statistics="openAngleStatsPicker"
-      @save-annotations="saveAnnotations"
-      @toggle-clear-dropdown="toggleClearDropdown"
-      @clear-highlights="clearHighlights"
-      @clear-underlines="clearUnderlines"
-      @clear-comments="clearComments"
-      @clear-traces="clearTraces"
-      @clear-angles="clearAngles"
-      @clear-horizontal-lengths="clearHorizontalLengths"
-      @clear-vertical-lengths="clearVerticalLengths"
-      @clear-all="clearAll"
-      @start-crop="startCrop"
-    />
+    <!-- Top Bar -->
+    <div class="top-bar">
+      <img src="@/assets/logo.png" alt="Logo" class="logo" />
 
-    <!-- Navigation -->
+      <div class="toolbar">
+        <!-- Highlight -->
+        <div class="toolbar-item" @click="selectTool('highlight')">
+          <i class="fa-solid fa-highlighter"></i>
+          <span>Highlight</span>
+        </div>
+
+        <!-- Underline -->
+        <div class="toolbar-item" @click="selectTool('underline')">
+          <i class="fa-solid fa-underline"></i>
+          <span>Underline</span>
+        </div>
+
+        <!-- Comment -->
+        <div class="toolbar-item" @click="selectTool('comment')">
+          <i class="fa-regular fa-comment"></i>
+          <span>Comment</span>
+        </div>
+
+        <!-- Trace -->
+        <div class="toolbar-item" @click="selectTool('trace')">
+          <i class="fa-solid fa-pencil"></i>
+          <span>Trace</span>
+        </div>
+
+        <!-- Measure Angle -->
+        <div class="toolbar-item" @click="selectTool('measure')">
+          <i class="fa-solid fa-angle-up"></i>
+          <span>Measure</span>
+          <span>Angle</span>
+        </div>
+
+        <!-- Horizontal Bands -->
+        <div class="toolbar-item" @click="openHorizontalPopup">
+          <i class="fa-solid fa-ruler-horizontal"></i>
+          <span>Horizontal</span>
+          <span>Bands</span>
+        </div>
+
+        <!-- Vertical Bands -->
+        <div class="toolbar-item" @click="openVerticalPopup">
+          <i class="fa-solid fa-ruler-vertical"></i>
+          <span>Vertical</span>
+          <span>Bands</span>
+        </div>
+
+        <!-- Crop -->
+        <div class="toolbar-item" @click="startCrop">
+          <i class="fa-solid fa-scissors"></i>
+          <span>Crop</span>
+        </div>
+
+        <!-- Generate Statistics -->
+        <div class="toolbar-item" @click="showStatsPanel = !showStatsPanel">
+          <i class="fa-solid fa-calculator"></i>
+          <span>Generate</span>
+          <span>Statistics</span>
+        </div>
+
+        <!-- Save -->
+        <div class="toolbar-item" @click="saveAnnotations">
+          <i class="fa-solid fa-save"></i>
+          <span>Save</span>
+        </div>
+
+        <!-- Clear -->
+        <div class="toolbar-item" @click="toggleClearDropdown">
+          <i class="fa-regular fa-trash-can"></i>
+          <span>Clear</span>
+          <div v-if="showClearDropdown" class="clear-dropdown">
+            <div @click.stop="clearHighlights">Clear Highlights</div>
+            <div @click.stop="clearUnderlines">Clear Underlines</div>
+            <div @click.stop="clearComments">Clear Comments</div>
+            <div @click.stop="clearTraces">Clear Traces</div>
+            <div @click.stop="clearAngles">Clear Angles</div>
+            <div @click.stop="clearHorizontalLengths">Clear Horizontal Lengths</div>
+            <div @click.stop="clearVerticalLengths">Clear Vertical Lengths</div>
+            <div @click.stop="clearAll">Clear All</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Page Navigation (now right under the toolbar, at the top) -->
     <NavigationBar
       :currentPage="currentPage"
       :totalPages="totalPages"
       :pageInput="pageInput"
       @prev="prevPage"
       @next="nextPage"
-      @go-to="(p1) => { pageInput = p1; goToPage(); }"
+      @go-to="goToPage"
     />
 
-    <!-- Main stage (image + overlays) -->
-    <ImageStage
-      ref="viewer"
-      :image="croppedImage || currentImage"
-      :cursorMode="(traceModeActive || highlightModeActive || underlineModeActive || measureModeActive || isMeasuring) ? 'crosshair' : 'default'"
-      @image-load="handleImageLoad"
-      @mousedown="startTrace"
-      @mousemove="trace"
-      @mouseup="endTrace"
-    >
-      <!-- Traces -->
-      <TracesLayer
-        :strokes="currentPageStrokes"
-        :dynamicStroke="currentStroke"
-      />
+    <!-- Tool tip message -->
+    <div class="tool-message" v-if="toolMessage">{{ toolMessage }}</div>
 
-      <!-- Angles -->
-      <AnglesLayer
-        :angles="currentPageAngleMeasurements"
-        :tempPoints="measurePoints"
-        :tempAngle="measurePoints.length === 3 ? calculatedAngle : null"
-        @point-mousedown="({ pointIndex, event }) => startDraggingPoint(pointIndex, event)"
-        @temp-point-mousedown="({ pointIndex, event }) => { draggingPoint = pointIndex; }"
-      />
-
-      <!-- Highlights -->
-      <HighlightsLayer
-        :highlights="currentPageHighlights"
-        :tempHighlight="highlightModeActive && currentSquare ? currentSquare : null"
-      />
-
-      <!-- Underlines -->
-      <UnderlinesLayer
-        :underlines="currentPageUnderlines"
-        :tempUnderline="underlineModeActive && currentUnderline ? currentUnderline : null"
-      />
-
-      <!-- Lengths / Bands -->
-      <LengthsLayer
-        :measurements="currentPageLengthMeasurements"
-        :dynamic="isMeasuring && currentSquare ? currentSquare : null"
-        :labelPositions="labelPositions"
-        @label-mousedown="({ id, event, measurement }) => startLabelDrag(id, event, measurement)"
-      />
-
-      <!-- Comments -->
-      <CommentsLayer
-        :comments="currentPageComments"
-        :showInput="showCommentInput"
-        :draft="{ text: currentCommentText, x: currentCommentPosition?.x || 0, y: (currentCommentPosition?.y || 0) + 100 }"
-        @add="onAddComment"
-        @cancel="cancelComment"
-        @drag-start="startDraggingComment"
-        @drag-move="dragComment"
-        @drag-stop="stopDraggingComment"
-      />
-
-      <!-- Cropping Rectangle (dynamic while dragging) -->
+    <!-- Workspace: stage + annotations bank -->
+    <div class="workspace">
+      <!-- Image Stage -->
       <div
-        v-if="(croppingStarted || cropButtonClicked) && currentSquare"
-        class="cropping-rectangle"
-        :style="{
-          left: currentSquare.x + 'px',
-          top: currentSquare.y + 'px',
-          width: currentSquare.width + 'px',
-          height: currentSquare.height + 'px'
-        }"
-      />
-    </ImageStage>
-
-    <!-- Pen Selection -->
-    <PenSelectionPopup
-      :visible="showPenSelectionPopup"
-      :penAngles="penAngles"
-      :selectedAngle="selectedPenAngle"
-      :testPath="testTracePath"
-      :penWidth="penWidth"
-      :penHeight="penHeight"
-      @select="selectPen"
-      @test-start="startTestTrace"
-      @test-move="testTrace"
-      @test-end="endTestTrace"
-      @confirm="confirmPenSelection"
-      @cancel="cancelPenSelection"
-    />
-
-    <!-- Statistics -->
-    <StatisticsPopup
-      :visible="showStatistics"
-      :horizontal="horizontalStatistics"
-      :vertical="verticalStatistics"
-      @close="closeStatisticsPopup"
-    />
-
-    <AngleStatisticsPopup
-      :visible="showAngleStatistics"
-      :stats="angleStatistics"
-      @close="closeAngleStatisticsPopup"
-    />
-
-    <!-- Length popups -->
-    <LengthPopupHorizontal
-      :visible="showHorizontalPopup"
-      :measurementColors="measurementColors"
-      @confirm="(sel) => { selectedMeasurement = sel; hideLengthPopup(); startLengthMeasurement(); }"
-      @cancel="hideLengthPopup"
-    />
-    <LengthPopupVertical
-      :visible="showVerticalPopup"
-      :measurementColors="measurementColors"
-      @confirm="(sel) => { selectedMeasurement = sel; hideLengthPopup(); startLengthMeasurement(); }"
-      @cancel="hideLengthPopup"
-    />
-
-    <!-- Angle: choose label (label == ID) -->
-    <AngleLabelPopup
-      :visible="showAngleLabelPopup"
-      :labels="angleLabels"
-      :initialLabel="activeAngleLabel"
-      @confirm="onConfirmAngleLabel"
-      @cancel="onCancelAngleLabel"
-    />
-
-    <!-- Angle stats scope picker -->
-    <AngleStatsPickerPopup
-      :visible="showAngleStatsPicker"
-      :labels="angleLabels"
-      @confirm="onConfirmAngleStats"
-      @cancel="onCancelAngleStats"
-    />
-
-    <!-- Cropped preview popup -->
-    <CroppedPreviewPopup
-      :croppedImage="croppedImage"
-      @start-annotation="startCroppedAnnotation"
-      @move-annotation="handleCroppedAnnotation"
-      @end-annotation="endCroppedAnnotation"
-      @save-png="saveCroppedImageAsPNG"
-      @save-svg="saveCroppedImageAsSVG"
-      @save-annotated="saveCroppedImage"
-      @close="closeCroppedPopup"
-    >
-      <!-- Render cropped overlays inside popup via the slot -->
-      <svg
-        v-if="croppedImage"
-        class="drawing-layer"
-        :width="popupDimensions.width"
-        :height="popupDimensions.height"
-        style="position:absolute; inset:0; width:100%; height:100%; z-index:2; pointer-events:none;"
+        class="pdf-viewer stage"
+        ref="viewer"
+        :style="{ cursor: (traceModeActive || highlightModeActive || underlineModeActive || measureModeActive || isMeasuring || moveModeActive) ? 'crosshair' : 'default' }"
+        @mousedown="startTrace($event)"
+        @mousemove="trace($event)"
+        @mouseup="endTrace($event)"
       >
-        <!-- Cropped traces -->
-        <polyline
-          v-for="(stroke, index) in croppedStrokes"
-          :key="'cstroke-' + index"
-          :points="formatPoints(stroke.points)"
-          :stroke="stroke.color"
-          stroke-width="2"
-          fill="none"
+        <img
+          v-if="croppedImage || currentImage"
+          :src="croppedImage || currentImage"
+          ref="image"
+          class="image-viewer"
+          @load="handleImageLoad"
+          draggable="false"
         />
-        <!-- Dynamic cropped trace -->
-        <polyline
-          v-if="croppedCurrentStroke && croppedCurrentStroke.points && croppedCurrentStroke.points.length"
-          :points="formatPoints(croppedCurrentStroke.points)"
-          :stroke="croppedCurrentStroke.color"
-          stroke-width="2"
-          fill="none"
-        />
-        <!-- Cropped angles points/lines/labels -->
-        <g v-if="croppedMeasurePoints.length">
-          <circle
-            v-for="(point, index) in croppedMeasurePoints"
-            :key="'cmeasure-point-' + index"
-            :cx="point.x" :cy="point.y" r="5" fill="red"
-          />
-          <line
-            v-if="croppedMeasurePoints.length >= 2"
-            :x1="croppedMeasurePoints[0].x" :y1="croppedMeasurePoints[0].y"
-            :x2="croppedMeasurePoints[1].x" :y2="croppedMeasurePoints[1].y"
-            stroke="blue" stroke-width="2"
-          />
-          <line
-            v-if="croppedMeasurePoints.length === 3"
-            :x1="croppedMeasurePoints[1].x" :y1="croppedMeasurePoints[1].y"
-            :x2="croppedMeasurePoints[2].x" :y2="croppedMeasurePoints[2].y"
-            stroke="blue" stroke-width="2"
-          />
-          <text
-            v-if="croppedMeasurePoints.length === 3 && croppedCalculatedAngle"
-            :x="croppedMeasurePoints[1].x + 10"
-            :y="croppedMeasurePoints[1].y - 10"
-            fill="darkblue" font-size="12"
-          >
-            {{ croppedCalculatedAngle }}°
-          </text>
-        </g>
-        <g v-for="(measure, index) in croppedMeasures" :key="'cmeasure-' + index">
-          <line
-            v-if="measure.points.length >= 2"
-            :x1="measure.points[0].x" :y1="measure.points[0].y"
-            :x2="measure.points[1].x" :y2="measure.points[1].y"
-            stroke="blue" stroke-width="2"
-          />
-          <line
-            v-if="measure.points.length === 3"
-            :x1="measure.points[1].x" :y1="measure.points[1].y"
-            :x2="measure.points[2].x" :y2="measure.points[2].y"
-            stroke="blue" stroke-width="2"
-          />
-          <text
-            v-if="measure.points.length === 3 && measure.angle"
-            :x="measure.points[1].x + 10"
-            :y="measure.points[1].y - 10"
-            fill="darkblue" font-size="12"
-          >
-            {{ measure.angle }}°
-          </text>
-          <circle
-            v-for="(point, pi) in measure.points"
-            :key="'cmeasure-final-point-' + pi"
-            :cx="point.x" :cy="point.y" r="5" fill="red"
-          />
-        </g>
-      </svg>
 
-      <!-- Cropped highlight + underline rectangles -->
-      <div
-        v-if="croppedCurrentHighlight"
-        class="highlight-rectangle"
-        :style="croppedCurrentHighlight.style"
-      ></div>
-      <div
-        v-for="(hl, index) in croppedHighlights"
-        :key="'chl-' + index"
-        class="highlight-rectangle"
-        :style="hl.style"
-      ></div>
+        <!-- SVG drawing layer -->
+        <svg
+          v-if="showTraces"
+          class="drawing-layer"
+          :width="viewerWidth"
+          :height="viewerHeight"
+        >
+          <!-- existing traces -->
+          <polyline
+            v-for="(stroke, index) in currentPageStrokes"
+            :key="'stroke-' + index"
+            :points="formatPoints(stroke.points)"
+            :stroke="stroke.color"
+            :stroke-width="stroke.penWidth"
+            :stroke-height="stroke.penHeight"
+            fill="none"
+          />
+          <!-- measure points (temp) -->
+          <circle
+            v-for="(point, index) in measurePoints"
+            :key="'measure-point-' + index"
+            :cx="point.x"
+            :cy="point.y"
+            r="5"
+            fill="red"
+          />
+          <!-- saved angles -->
+          <g
+            v-for="(annotation, index) in currentPageAngles"
+            :key="'angle-' + index"
+          >
+            <line
+              v-if="annotation.type === 'measure' && annotation.points.length >= 2"
+              :x1="annotation.points[0].x"
+              :y1="annotation.points[0].y"
+              :x2="annotation.points[1].x"
+              :y2="annotation.points[1].y"
+              stroke="blue"
+              stroke-width="2"
+            />
+            <line
+              v-if="annotation.type === 'measure' && annotation.points.length === 3"
+              :x1="annotation.points[1].x"
+              :y1="annotation.points[1].y"
+              :x2="annotation.points[2].x"
+              :y2="annotation.points[2].y"
+              stroke="blue"
+              stroke-width="2"
+            />
+            <text
+              v-if="annotation.type === 'measure' && annotation.points.length === 3"
+              :x="annotation.points[1].x + 10"
+              :y="annotation.points[1].y - 10"
+              font-size="12"
+              fill="darkblue"
+            >
+              {{ annotation.angle }}°{{ annotation.label ? ' • ' + annotation.label : '' }}
+            </text>
+          </g>
+          <!-- dynamic freehand trace -->
+          <polyline
+            v-if="currentStroke"
+            :points="formatPoints(currentStroke.points)"
+            :stroke="currentStroke.color"
+            :stroke-width="currentStroke.penWidth"
+            :stroke-height="currentStroke.penHeight"
+            fill="none"
+          />
+        </svg>
 
-      <div
-        v-if="croppedCurrentUnderline"
-        class="underline-line"
-        :style="croppedCurrentUnderline.style"
-      ></div>
-      <div
-        v-for="(ul, index) in croppedUnderlines"
-        :key="'cul-' + index"
-        class="underline-line"
-        :style="ul.style"
-      ></div>
-    </CroppedPreviewPopup>
+        <!-- Dynamic Crop / Highlight / Length rectangles -->
+        <div
+          v-if="(isMeasuring && currentSquare) || (highlightModeActive && currentSquare) || (croppingStarted && currentSquare)"
+          class="length-measurement"
+          :style="{
+            left: `${currentSquare.x}px`,
+            top: `${currentSquare.y}px`,
+            width: `${currentSquare.width}px`,
+            height: `${currentSquare.height}px`,
+            backgroundColor: currentSquare.color || 'rgba(0,0,0,0.1)',
+            position: 'absolute',
+          }"
+        >
+          <div
+            v-if="isMeasuring"
+            class="length-label draggable-label"
+            :style="{
+              left: (labelPositions['dynamic']?.x ?? 15) + 'px',
+              top: (labelPositions['dynamic']?.y ?? 15) + 'px',
+              position: 'absolute',
+              cursor: draggedLabelIndex === 'dynamic' ? 'grabbing' : 'grab',
+              backgroundColor: 'white',
+              zIndex: 2000,
+              userSelect: 'none',
+              pointerEvents: 'auto',
+            }"
+            @mousedown.stop="startLabelDrag('dynamic', $event)"
+          >
+            {{ currentSquare.label }}:
+            {{
+              isHorizontalLabel(currentSquare.label)
+                ? currentSquare.height
+                : currentSquare.width
+            }}px
+          </div>
+        </div>
+
+        <!-- Finalized Lengths -->
+        <div
+          v-for="(measurement, index) in currentPageLengthMeasurements"
+          :key="'length-' + index"
+          class="length-measurement"
+          :style="{
+            left: `${measurement.x}px`,
+            top: `${measurement.y}px`,
+            width: `${measurement.width}px`,
+            height: `${measurement.height}px`,
+            backgroundColor: measurement.color,
+            position: 'absolute',
+            border: '1px solid #000',
+          }"
+        >
+          <div
+            class="length-label draggable-label"
+            :style="{
+              left: (labelPositions[measurement.id]?.x ?? 15) + 'px',
+              top: (labelPositions[measurement.id]?.y ?? 15) + 'px',
+              position: 'absolute',
+              cursor: draggedLabelIndex === measurement.id ? 'grabbing' : 'grab',
+              backgroundColor: 'white',
+              zIndex: 2000,
+              userSelect: 'none',
+              pointerEvents: 'auto',
+            }"
+            @mousedown.stop="startLabelDrag(measurement.id, $event)"
+          >
+            {{ measurement.label }}:
+            {{
+              isHorizontalLabel(measurement.label)
+                ? measurement.height
+                : measurement.width
+            }}px
+          </div>
+        </div>
+
+        <!-- Highlights -->
+        <div
+          v-for="(annotation, index) in currentPageHighlights"
+          :key="'highlight-' + index"
+          class="highlight-rectangle"
+          :style="{
+            left: `${annotation.x}px`,
+            top: `${annotation.y}px`,
+            width: `${annotation.width}px`,
+            height: `${annotation.height}px`,
+            position: 'absolute',
+          }"
+        ></div>
+
+        <!-- Dynamic Underline -->
+        <div
+          v-if="underlineModeActive && currentUnderline"
+          class="underline-line"
+          :style="{
+            position: 'absolute',
+            left: `${currentUnderline.x}px`,
+            top: `${currentUnderline.y}px`,
+            width: `${currentUnderline.width}px`,
+            height: '2px',
+            backgroundColor: 'blue',
+          }"
+        ></div>
+
+        <!-- Saved Underlines -->
+        <div
+          v-for="(annotation, index) in currentPageUnderlines"
+          :key="'underline-' + index"
+          class="underline-line"
+          :style="{
+            position: 'absolute',
+            left: `${annotation.x}px`,
+            top: `${annotation.y}px`,
+            width: `${annotation.width}px`,
+            height: '2px',
+            backgroundColor: 'red',
+          }"
+        ></div>
+
+        <!-- Comments -->
+        <div
+          v-for="(comment, index) in currentPageComments"
+          :key="'comment-' + index"
+          class="comment-container"
+          :style="{ top: comment.y + 'px', left: comment.x + 'px', position: 'absolute' }"
+          @mousedown="startDraggingComment(index, $event)"
+          @mouseup="stopDraggingComment"
+          @mousemove="dragComment"
+        >
+          <div class="comment-icon">💬</div>
+          <div class="comment-bubble">
+            <div class="comment-content">{{ comment.text }}</div>
+          </div>
+        </div>
+
+        <!-- Comment Input -->
+        <div v-if="showCommentInput" class="comment-input-container">
+          <textarea
+            class="comment-input-box"
+            v-model="currentCommentText"
+            placeholder="Add your comment..."
+          ></textarea>
+          <div class="comment-input-actions">
+            <button class="btn-save-comment" @click="addComment">Add</button>
+            <button class="btn-cancel-comment" @click="cancelComment">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Cropping rectangle -->
+        <div
+          v-if="croppingStarted && currentSquare"
+          class="cropping-rectangle"
+          :style="{
+            left: `${currentSquare.x}px`,
+            top: `${currentSquare.y}px`,
+            width: `${currentSquare.width}px`,
+            height: `${currentSquare.height}px`,
+            position: 'absolute',
+          }"
+        ></div>
+      </div>
+
+<!-- Compact Bank Panel (anchored, not affecting layout) -->
+   <AnnotationsBank
+    :page="currentPage"
+     :items="bankItems"
+     :selectedKeys="bankSelectedKeys"
+     :multiSelect="bankMultiSelect"
+     :moveActive="moveModeActive"
+     @update:selected="(keys) => bankSelectedKeys = keys"
+     @toggle-multi="bankMultiSelect = !bankMultiSelect"
+     @request-move="enableMoveMode"
+     @cancel-move="disableMoveMode"
+     @request-delete="deleteSelectedFromBank"
+   />
+    </div>
+
+    <!-- Angle Label Picker Popup -->
+    <div v-if="showAngleLabelPopup" class="length-popup">
+      <div class="length-popup-content">
+        <h3>Select or Create Angle Label</h3>
+
+        <div class="label-grid">
+          <button
+            v-for="label in angleLabels"
+            :key="label"
+            class="grid-btn"
+            :class="{ active: activeAngleLabel === label }"
+            @click="activeAngleLabel = label"
+          >
+            {{ label }}
+          </button>
+        </div>
+
+        <div class="new-label-row">
+          <input v-model="newAngleLabel" placeholder="New label…" />
+          <button class="grid-btn" @click="confirmNewAngleLabel">Add</button>
+        </div>
+
+        <div class="popup-actions">
+          <button class="grid-btn" @click="confirmAngleLabel">Use Label</button>
+          <button class="grid-btn" @click="cancelAngleLabel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Angle Statistics Filter Popup -->
+    <div v-if="showAngleFilterPopup" class="length-popup">
+      <div class="length-popup-content">
+        <h3>Angle Measurements</h3>
+        <div class="row">
+          <label>Scope:</label>
+          <div class="label-grid">
+            <button class="grid-btn" :class="{active: angleScope==='page'}" @click="angleScope='page'">Current Page</button>
+            <button class="grid-btn" :class="{active: angleScope==='doc'}" @click="angleScope='doc'">Entire Document</button>
+          </div>
+        </div>
+        <div class="row">
+          <label>Label:</label>
+          <div class="label-grid">
+            <button class="grid-btn" :class="{active: angleFilterLabel==='__ALL__'}" @click="angleFilterLabel='__ALL__'">All labels</button>
+            <button
+              v-for="label in angleLabels"
+              :key="'f-'+label"
+              class="grid-btn"
+              :class="{active: angleFilterLabel===label}"
+              @click="angleFilterLabel=label"
+            >
+              {{ label }}
+            </button>
+          </div>
+        </div>
+
+        <div class="popup-actions">
+          <button class="grid-btn" @click="runAngleStatistics">Generate</button>
+          <button class="grid-btn" @click="showAngleFilterPopup=false">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trace Pen Popup -->
+    <div v-if="showTracePopup" class="length-popup">
+      <div class="length-popup-content">
+        <h3>Choose Pen & Angle</h3>
+
+        <div class="row" style="text-align:center">
+          <label style="width:auto;margin-right:8px">Angle:</label>
+          <div class="label-grid">
+            <button
+              v-for="ang in penAngles"
+              :key="'ang-'+ang"
+              class="grid-btn"
+              :class="{ active: selectedPenAngle === ang }"
+              @click="selectedPenAngle = ang"
+            >
+              {{ ang }}°
+            </button>
+          </div>
+        </div>
+
+        <div class="row" style="text-align:center">
+          <label style="width:auto;margin-right:8px">Nib size:</label>
+          <div class="label-grid">
+            <button
+              v-for="p in penSizes"
+              :key="'size-'+p.key"
+              class="grid-btn"
+              :class="{ active: selectedPenSize === p.key }"
+              @click="selectedPenSize = p.key"
+            >
+              {{ p.label }}
+            </button>
+          </div>
+        </div>
+
+        <div class="popup-actions">
+          <button class="grid-btn" @click="confirmPenSelection">Start Tracing</button>
+          <button class="grid-btn" @click="cancelPenSelection">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats quick panel (Lengths + Angles entry) -->
+    <div v-if="showStatsPanel" class="stats-panel">
+      <div class="panel-card">
+        <h4>Statistics</h4>
+        <button class="grid-btn" @click="calculateCurrentPage">Lengths: Current Page</button>
+        <button class="grid-btn" @click="calculateEntireDocument">Lengths: Entire Document</button>
+        <button class="grid-btn" @click="showAngleFilterPopup = true">Angle Measurements…</button>
+        <button class="grid-btn" @click="showStatsPanel=false">Close</button>
+      </div>
+    </div>
+
+    <!-- Horizontal Bands Popup (as buttons) -->
+    <div v-if="showHorizontalPopup" class="length-popup">
+      <div class="length-popup-content">
+        <h3>Select Horizontal Measurement</h3>
+        <div class="btn-grid">
+          <button class="grid-btn" @click="beginLength('ascenders')">
+            <span class="swatch" :style="{ background: measurementColors.ascenders }"></span>
+            <span>Ascenders</span>
+          </button>
+          <button class="grid-btn" @click="beginLength('descenders')">
+            <span class="swatch" :style="{ background: measurementColors.descenders }"></span>
+            <span>Descenders</span>
+          </button>
+          <button class="grid-btn" @click="beginLength('interlinear')">
+            <span class="swatch" :style="{ background: measurementColors.interlinear }"></span>
+            <span>Interlinear Spaces</span>
+          </button>
+          <button class="grid-btn" @click="beginLength('upperMargin')">
+            <span class="swatch" :style="{ background: measurementColors.upperMargin }"></span>
+            <span>Upper Margin</span>
+          </button>
+          <button class="grid-btn" @click="beginLength('lowerMargin')">
+            <span class="swatch" :style="{ background: measurementColors.lowerMargin }"></span>
+            <span>Lower Margin</span>
+          </button>
+          <button class="grid-btn" @click="beginLength('lineHeight')">
+            <span class="swatch" :style="{ background: measurementColors.lineHeight }"></span>
+            <span>Line Height</span>
+          </button>
+          <button class="grid-btn" @click="beginLength('minimumHeight')">
+            <span class="swatch" :style="{ background: measurementColors.minimumHeight }"></span>
+            <span>Minimum Height</span>
+          </button>
+        </div>
+        <div class="popup-actions">
+          <button class="grid-btn" @click="hideLengthPopup">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Vertical Bands Popup (as buttons) -->
+    <div v-if="showVerticalPopup" class="length-popup">
+      <div class="length-popup-content">
+        <h3>Select Vertical Measurement</h3>
+        <div class="btn-grid">
+          <button class="grid-btn" @click="beginLength('internalMargin')">
+            <span class="swatch" :style="{ background: measurementColors.internalMargin }"></span>
+            <span>Internal Margin</span>
+          </button>
+          <button class="grid-btn" @click="beginLength('intercolumnSpaces')">
+            <span class="swatch" :style="{ background: measurementColors.intercolumnSpaces }"></span>
+            <span>Intercolumn Spaces</span>
+          </button>
+        </div>
+        <div class="popup-actions">
+          <button class="grid-btn" @click="hideLengthPopup">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Angle Statistics Result Popup -->
+    <div v-if="showAngleStatistics" class="statistics-popup">
+      <div class="statistics-popup-content">
+        <h3>Angle Statistics</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Average</th>
+              <th>Standard Deviation</th>
+              <th>Mode</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{{ angleStatistics.average.toFixed(2) }}</td>
+              <td>{{ angleStatistics.standardDeviation.toFixed(2) }}</td>
+              <td>
+                {{ typeof angleStatistics.mode === "number" ? angleStatistics.mode.toFixed(2) : angleStatistics.mode }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <button class="grid-btn" @click="closeAngleStatisticsPopup">Close</button>
+      </div>
+    </div>
+
+    <!-- Lengths Statistics Result Popup -->
+    <div v-if="showStatistics" class="statistics-popup">
+      <div class="statistics-popup-content">
+        <h3>Statistics</h3>
+
+        <!-- Horizontal -->
+        <h4>Horizontal Lengths</h4>
+        <table>
+          <thead>
+            <tr>
+              <th>Measurement</th>
+              <th>Average</th>
+              <th>Standard Deviation</th>
+              <th>Mode</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(stats, type) in horizontalStatistics" :key="type">
+              <td>{{ type }}</td>
+              <td>{{ stats.average.toFixed(2) }}</td>
+              <td>{{ stats.standardDeviation.toFixed(2) }}</td>
+              <td>{{ typeof stats.mode === 'number' ? stats.mode.toFixed(2) : stats.mode }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Vertical -->
+        <h4>Vertical Lengths</h4>
+        <table>
+          <thead>
+            <tr>
+              <th>Measurement</th>
+              <th>Average</th>
+              <th>Standard Deviation</th>
+              <th>Mode</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(stats, type) in verticalStatistics" :key="type">
+              <td>{{ type }}</td>
+              <td>{{ stats.average.toFixed(2) }}</td>
+              <td>{{ stats.standardDeviation.toFixed(2) }}</td>
+              <td>{{ typeof stats.mode === 'number' ? stats.mode.toFixed(2) : stats.mode }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <button class="grid-btn" @click="closeStatisticsPopup">Close</button>
+      </div>
+    </div>
+
+    <!-- Cropped Image Popup -->
+    <div v-if="croppedImage" class="blurred-background" style="top: 90px"></div>
+    <div v-if="croppedImage" class="cropped-popup">
+      <div class="cropped-popup-content">
+        <h3>Cropped Image</h3>
+        <hr class="popup-divider" />
+        <div
+          class="cropped-image-container"
+          ref="croppedContainer"
+          @mousedown="startCroppedAnnotation"
+          @mousemove="handleCroppedAnnotation"
+          @mouseup="endCroppedAnnotation"
+          @mouseleave="endCroppedAnnotation"
+        >
+          <img
+            :src="croppedImage"
+            alt="Cropped"
+            class="cropped-image"
+            draggable="false"
+            style="display: block; width: 100%; height: auto"
+          />
+
+          <!-- Cropped Highlights -->
+          <div
+            v-if="croppedCurrentHighlight"
+            class="highlight-rectangle"
+            :style="croppedCurrentHighlight.style"
+          ></div>
+          <div
+            v-for="(hl, index) in croppedHighlights"
+            :key="'chl-' + index"
+            class="highlight-rectangle"
+            :style="hl.style"
+          ></div>
+
+          <!-- Cropped Underlines -->
+          <div
+            v-if="croppedCurrentUnderline"
+            class="underline-line"
+            :style="croppedCurrentUnderline.style"
+          ></div>
+          <div
+            v-for="(ul, index) in croppedUnderlines"
+            :key="'cul-' + index"
+            class="underline-line"
+            :style="ul.style"
+          ></div>
+
+          <!-- Cropped Traces & Angles -->
+          <svg
+            class="drawing-layer"
+            :width="popupDimensions.width"
+            :height="popupDimensions.height"
+            style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:2;"
+          >
+            <polyline
+              v-for="(stroke, index) in croppedStrokes"
+              :key="'cstroke-' + index"
+              :points="formatPoints(stroke.points)"
+              :stroke="stroke.color"
+              stroke-width="2"
+              fill="none"
+            />
+            <polyline
+              v-if="croppedCurrentStroke && croppedCurrentStroke.points && croppedCurrentStroke.points.length"
+              :points="formatPoints(croppedCurrentStroke.points)"
+              :stroke="croppedCurrentStroke.color"
+              stroke-width="2"
+              fill="none"
+            />
+            <!-- temp cropped angle points -->
+            <g v-if="croppedMeasurePoints.length">
+              <circle
+                v-for="(point, index) in croppedMeasurePoints"
+                :key="'cmeasure-point-' + index"
+                :cx="point.x"
+                :cy="point.y"
+                r="5"
+                fill="red"
+                @mousedown.stop="croppedDraggingPoint = index"
+              />
+              <line
+                v-if="croppedMeasurePoints.length >= 2"
+                :x1="croppedMeasurePoints[0].x"
+                :y1="croppedMeasurePoints[0].y"
+                :x2="croppedMeasurePoints[1].x"
+                :y2="croppedMeasurePoints[1].y"
+                stroke="blue"
+                stroke-width="2"
+              />
+              <line
+                v-if="croppedMeasurePoints.length === 3"
+                :x1="croppedMeasurePoints[1].x"
+                :y1="croppedMeasurePoints[1].y"
+                :x2="croppedMeasurePoints[2].x"
+                :y2="croppedMeasurePoints[2].y"
+                stroke="blue"
+                stroke-width="2"
+              />
+              <text
+                v-if="croppedMeasurePoints.length === 3 && croppedCalculatedAngle"
+                :x="croppedMeasurePoints[1].x + 10"
+                :y="croppedMeasurePoints[1].y - 10"
+                fill="darkblue"
+                font-size="12"
+              >
+                {{ croppedCalculatedAngle }}°
+              </text>
+            </g>
+
+            <!-- finalized cropped angles -->
+            <g v-for="(measure, index) in croppedMeasures" :key="'cmeasure-' + index">
+              <line
+                v-if="measure.points.length >= 2"
+                :x1="measure.points[0].x"
+                :y1="measure.points[0].y"
+                :x2="measure.points[1].x"
+                :y2="measure.points[1].y"
+                stroke="blue"
+                stroke-width="2"
+              />
+              <line
+                v-if="measure.points.length === 3"
+                :x1="measure.points[1].x"
+                :y1="measure.points[1].y"
+                :x2="measure.points[2].x"
+                :y2="measure.points[2].y"
+                stroke="blue"
+                stroke-width="2"
+              />
+              <text
+                v-if="measure.points.length === 3 && measure.angle"
+                :x="measure.points[1].x + 10"
+                :y="measure.points[1].y - 10"
+                fill="darkblue"
+                font-size="12"
+              >
+                {{ measure.angle }}°
+              </text>
+              <circle
+                v-for="(point, pi) in measure.points"
+                :key="'cmeasure-final-point-' + pi"
+                :cx="point.x"
+                :cy="point.y"
+                r="5"
+                fill="red"
+              />
+            </g>
+          </svg>
+        </div>
+
+        <div class="popup-actions">
+          <button class="grid-btn" @click="saveCroppedImageAsPNG">Save as PNG</button>
+          <button class="grid-btn" @click="saveCroppedImageAsSVG">Save as SVG</button>
+          <button class="grid-btn" @click="saveCroppedImage">Save with Annotations</button>
+          <button class="grid-btn" @click="closeCroppedPopup">Close</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -297,109 +786,82 @@
 /* eslint-disable */
 import { PDFDocument } from "pdf-lib";
 import html2canvas from "html2canvas";
-
-// Viewer pieces
-import Toolbar from "@/components/viewer/Toolbar.vue";
+import AnnotationsBank from "@/components/viewer/AnnotationsBank.vue";
 import NavigationBar from "@/components/viewer/NavigationBar.vue";
-import ImageStage from "@/components/viewer/ImageStage.vue";
-import TracesLayer from "@/components/viewer/TracesLayer.vue";
-import AnglesLayer from "@/components/viewer/AnglesLayer.vue";
-import HighlightsLayer from "@/components/viewer/HighlightsLayer.vue";
-import UnderlinesLayer from "@/components/viewer/UnderlinesLayer.vue";
-import LengthsLayer from "@/components/viewer/LengthsLayer.vue";
-import CommentsLayer from "@/components/viewer/CommentsLayer.vue";
-
-// Popups
-import PenSelectionPopup from "@/components/popups/PenSelectionPopup.vue";
-import StatisticsPopup from "@/components/popups/StatisticsPopup.vue";
-import AngleStatisticsPopup from "@/components/popups/AngleStatisticsPopup.vue";
-import LengthPopupHorizontal from "@/components/popups/LengthPopupHorizontal.vue";
-import LengthPopupVertical from "@/components/popups/LengthPopupVertical.vue";
-import CroppedPreviewPopup from "@/components/popups/CroppedPreviewPopup.vue";
-
-import AngleLabelPopup from "@/components/popups/AngleLabelPopup.vue";
-import AngleStatsPickerPopup from "@/components/popups/AngleStatsPickerPopup.vue";
 
 export default {
   name: "IIIFViewer",
-  components: {
-    Toolbar,
-    NavigationBar,
-    ImageStage,
-    TracesLayer,
-    AnglesLayer,
-    HighlightsLayer,
-    UnderlinesLayer,
-    LengthsLayer,
-    CommentsLayer,
-    PenSelectionPopup,
-    StatisticsPopup,
-    AngleStatisticsPopup,
-    LengthPopupHorizontal,
-    LengthPopupVertical,
-    CroppedPreviewPopup,
-    AngleLabelPopup,
-    AngleStatsPickerPopup,
-  },
+  components: { AnnotationsBank, NavigationBar },
   props: {
     source: { type: String, required: true },
   },
   data() {
     return {
-      // images / pages
-      images: [],
-      currentPage: 0,
-      pageInput: 1,
-
-      // viewer metrics
-      scalingFactor: 1,
-
-      // tool state
-      showTraces: false,
+      annotationsByPage: [],
+      // Pen config
+      penWidth: 3,
+      penHeight: 6,
+      // Trace popup & pen options
+      showTracePopup: false,
+      penAngles: [0, 15, 30, 45, 60, 75],
+      penSizes: [
+        { key: 'thin',   label: 'Thin'   , w: 2, h: 3 },
+        { key: 'medium', label: 'Medium' , w: 3, h: 5 },
+        { key: 'broad',  label: 'Broad'  , w: 5, h: 8 },
+      ],
+      selectedPenAngle: 45,
+      selectedPenSize: 'medium',
+      currentNibAngle: 45,
+      // Toggles / modes
+      showTraces: true,
       measureModeActive: false,
       traceModeActive: false,
       commentModeActive: false,
       highlightModeActive: false,
       underlineModeActive: false,
+      isMeasuring: false, // length-bands creation
+      croppingStarted: false,
+      cropButtonClicked: false,
 
-      // tool UI
-      toolMessage: "",
-      showCalculateDropdown: false,
-      showClearDropdown: false,
+      // Stage state
+      images: [],
+      currentPage: 0,
+      pageInput: 1,
+      imageLoaded: false,
+      scalingFactor: 1,
 
-      // pen
-      penAngles: [0, 25, 30, 50, 80],
-      selectedPenAngle: null,
-      showPenSelectionPopup: false,
-      penWidth: 3,
-      penHeight: 6,
-      testTracePath: "",
-
-      // trace data
+      // Drawing state
+      startPoint: null,
+      currentSquare: null, // for crop / highlight / bands
+      currentUnderline: null,
       currentStroke: null,
+      strokes: [],
+      dynamicTracePath: "",
 
-      // measure angles
-      measurePoints: [],
-      draggingPoint: -1,
-      calculatedAngle: 0,
+      // Angles
+      measurePoints: [],      // temp points for new angle OR during drag
+      draggingPoint: -1,      // index within measurePoints
       editingAnnotationIndex: -1,
+      calculatedAngle: 0,
 
-      // angle labeling (label == ID)
-      angleLabels: [],
-      activeAngleLabel: "",
+      // Angle labels
       showAngleLabelPopup: false,
-      showAngleStatsPicker: false,
+      activeAngleLabel: null,
+      angleLabels: [],           // list of strings (persist within session)
+      newAngleLabel: "",
 
-      // bands / lengths
+      // Angle stats filter
+      showAngleFilterPopup: false,
+      angleScope: "page",        // 'page' | 'doc'
+      angleFilterLabel: "__ALL__", // "__ALL__" or a label
+      angleStatistics: { average: 0, standardDeviation: 0, mode: "No mode" },
+      showAngleStatistics: false,
+
+      // Bands
       showHorizontalPopup: false,
       showVerticalPopup: false,
       selectedMeasurement: "ascenders",
-      isMeasuring: false,
       lengthMeasurementActive: false,
-      labelPositions: {},
-      draggedLabelIndex: null,
-      labelDragOffset: { x: 0, y: 0 },
-
       measurementColors: {
         ascenders: "rgba(0, 255, 0, 0.5)",
         descenders: "rgba(0, 0, 255, 0.5)",
@@ -422,27 +884,19 @@ export default {
         lineHeight: {},
         minimumHeight: {},
       },
+      labelPositions: {}, // for length labels drag
+      draggedLabelIndex: null,
+      labelDragOffset: { x: 0, y: 0 },
 
-      // rectangles / dragging
-      startPoint: null,
-      currentSquare: null,
+      // Popups and stats
+      showStatistics: false,
+      horizontalStatistics: {},
+      verticalStatistics: {},
+      showStatsPanel: false,
 
-      // annotations storage
-      annotationsByPage: [],
-      comments: [],
-
-      // highlights/underlines dynamic
-      currentUnderline: null,
-      isFirstClick: true,
-
-      // crop
-      croppingStarted: false,
-      cropButtonClicked: false,
-      croppedImage: null,
+      // Cropped popup state
       croppedSvg: null,
-      popupDimensions: { width: 0, height: 0 },
-
-      // cropped overlays
+      croppedImage: null,
       croppedStrokes: [],
       croppedMeasures: [],
       croppedHighlights: [],
@@ -451,101 +905,225 @@ export default {
       croppedCalculatedAngle: null,
       croppedDraggingPoint: -1,
       croppedCurrentStroke: null,
+      croppedCurrentMeasure: null,
       croppedCurrentHighlight: null,
       croppedCurrentUnderline: null,
+      popupDimensions: { width: 0, height: 0 },
 
-      // statistics popups
-      showStatistics: false,
-      horizontalStatistics: {},
-      verticalStatistics: {},
-      showAngleStatistics: false,
-      angleStatistics: {},
-
-      // comments input
+      // Comments
+      comments: [],
       showCommentInput: false,
       currentCommentText: "",
       currentCommentPosition: null,
+      draggingCommentIndex: null,
+      dragOffset: { x: 0, y: 0 },
 
-      // misc
-      imageLoaded: false,
+      // UI
+      showClearDropdown: false,
+      toolMessage: "",
+
+      // Bank
+      bankSelectedKeys: [],
+      bankMultiSelect: true,
+      moveModeActive: false,
+      moveStartPos: null,
+      currentMoveDelta: { x: 0, y: 0 },
     };
   },
   computed: {
+    viewerWidth() {
+      const viewer = this.$refs.viewer;
+      return viewer ? viewer.clientWidth : 0;
+    },
+    viewerHeight() {
+      const viewer = this.$refs.viewer;
+      return viewer ? viewer.clientHeight : 0;
+    },
     currentImage() {
       return this.images[this.currentPage] || null;
     },
     totalPages() {
       return this.images.length;
     },
-    currentPageStrokes() {
-      return (
-        this.annotationsByPage[this.currentPage]?.filter((a) => a.type === "trace") || []
-      );
-    },
-    currentPageAngleMeasurements() {
-      return (
-        this.annotationsByPage[this.currentPage]?.filter((a) => a.type === "measure") || []
-      );
-    },
     currentPageHighlights() {
-      return (
-        this.annotationsByPage[this.currentPage]?.filter((a) => a.type === "highlight") || []
-      );
+      return (this.annotationsByPage[this.currentPage] || []).filter(a => a.type === "highlight");
     },
     currentPageUnderlines() {
-      return (
-        this.annotationsByPage[this.currentPage]?.filter((a) => a.type === "underline") || []
-      );
+      return (this.annotationsByPage[this.currentPage] || []).filter(a => a.type === "underline");
+    },
+    currentPageStrokes() {
+      const strokes = (this.annotationsByPage[this.currentPage] || []).filter(a => a.type === "trace");
+      
+      // Apply movement delta if in move mode and annotations are selected
+      if (this.moveModeActive && this.currentMoveDelta.x !== 0 || this.currentMoveDelta.y !== 0) {
+        return strokes.map((stroke, index) => {
+          const key = `trace-${index}`;
+          if (this.bankSelectedKeys.includes(key)) {
+            return {
+              ...stroke,
+              points: stroke.points.map(point => ({
+                x: point.x + this.currentMoveDelta.x,
+                y: point.y + this.currentMoveDelta.y
+              }))
+            };
+          }
+          return stroke;
+        });
+      }
+      
+      return strokes;
+    },
+    currentPageAngles() {
+      const angles = (this.annotationsByPage[this.currentPage] || []).filter(a => a.type === "measure");
+      
+      // Apply movement delta if in move mode and annotations are selected
+      if (this.moveModeActive && (this.currentMoveDelta.x !== 0 || this.currentMoveDelta.y !== 0)) {
+        return angles.map((angle, index) => {
+          const key = `measure-${index}`;
+          if (this.bankSelectedKeys.includes(key)) {
+            return {
+              ...angle,
+              points: angle.points.map(point => ({
+                x: point.x + this.currentMoveDelta.x,
+                y: point.y + this.currentMoveDelta.y
+              }))
+            };
+          }
+          return angle;
+        });
+      }
+      
+      return angles;
+    },
+    currentPageLengthMeasurements() {
+      const measurements = [];
+      for (const label in this.lengthMeasurements) {
+        if (this.lengthMeasurements[label][this.currentPage]) {
+          measurements.push(...this.lengthMeasurements[label][this.currentPage]);
+        }
+      }
+      return measurements;
     },
     currentPageComments() {
       return this.comments[this.currentPage] || [];
     },
-    currentPageLengthMeasurements() {
-      const arr = [];
-      for (const label in this.lengthMeasurements) {
-        if (this.lengthMeasurements[label][this.currentPage]) {
-          arr.push(...this.lengthMeasurements[label][this.currentPage]);
+    bankItems() {
+      const items = [];
+      const ann = this.annotationsByPage[this.currentPage] || [];
+
+      // Annotations
+      ann.forEach((a, i) => {
+        if (!a) return;
+
+        if (a.type === "measure") {
+          // Angle(Label)(number)
+          const label = a.label ? String(a.label) : "Unlabeled";
+          const num = typeof a.angle === "number" || typeof a.angle === "string"
+            ? String(a.angle)
+            : "";
+          items.push({
+            key: `a:${i}`,
+            category: "angle",
+            title: `Angle (${label}) (${num})`,
+            subtitle: "",
+            color: "#0d6efd", // blue accent for angles
+          });
+          return;
         }
-      }
-      return arr;
+
+        if (a.type === "trace") {
+          // Trace(Color)
+          const colorName = this.colorToName(a.color);
+          items.push({
+            key: `a:${i}`,
+            category: "trace",
+            title: `Trace (${colorName})`,
+            subtitle: `${a.points?.length || 0} pts`,
+            color: a.color || "#0d6efd",
+          });
+          return;
+        }
+
+        if (a.type === "highlight") {
+          items.push({
+            key: `a:${i}`,
+            category: "highlight",
+            title: "Highlight",
+            subtitle: `${Math.round(a.width)}×${Math.round(a.height)} px`,
+            color: "rgba(255, 255, 0, 0.8)",
+          });
+          return;
+        }
+
+        if (a.type === "underline") {
+          items.push({
+            key: `a:${i}`,
+            category: "underline",
+            title: "Underline",
+            subtitle: `${Math.round(a.width)} px`,
+            color: "red",
+          });
+          return;
+        }
+      });
+
+      // Length bands (name according to actual type)
+      const pageLengths = this.currentPageLengthMeasurements || [];
+      pageLengths.forEach((m) => {
+        items.push({
+          key: `l:${m.id}`,
+          category: "length",
+          title: this.camelToTitle(m.label || "Length"),
+          subtitle: `${Math.round(m.width)}×${Math.round(m.height)} px`,
+          color: m.color || this.measurementColors[m.label] || "#6ea8fe",
+        });
+      });
+
+      // Comments
+      const cmts = this.comments[this.currentPage] || [];
+      cmts.forEach((c, i) => {
+        items.push({
+          key: `c:${i}`,
+          category: "comment",
+          title: "Comment",
+          subtitle: (c.text || "").slice(0, 60),
+          color: "#6ea8fe",
+        });
+      });
+
+      return items;
     },
   },
   watch: {
     currentPage(n) {
       this.pageInput = n + 1;
-      if (!this.comments[this.currentPage]) this.comments[this.currentPage] = [];
     },
   },
   async created() {
     if (!this.source) {
-      alert("Invalid source provided. Returning to input page.");
+      alert("Invalid source. Returning to input.");
       this.$router.push({ name: "IIIFInput" });
       return;
     }
-
+    this.annotationsByPage = []; // init
     if (this.source.endsWith("manifest.json")) {
       await this.fetchIIIFImages(this.source);
     } else {
       this.images = [this.source];
-      this.annotationsByPage = new Array(this.images.length)
-        .fill()
-        .map(() => []);
-      this.comments = new Array(this.images.length).fill().map(() => []);
+      this.annotationsByPage = [ [] ];
+      this.comments = [ [] ];
     }
   },
   mounted() {
-    // global move for label dragging
     this._onLabelDragMove = (e) => {
       if (this.draggedLabelIndex !== null) {
         let measurement = null;
         if (this.draggedLabelIndex === "dynamic") {
           measurement = this.currentSquare;
         } else {
-          measurement = this.currentPageLengthMeasurements.find(
-            (m) => m.id === this.draggedLabelIndex
-          );
+          measurement = this.currentPageLengthMeasurements.find((m) => m.id === this.draggedLabelIndex);
         }
-        if (measurement) this.dragLabel(this.draggedLabelIndex, e, measurement);
+        if (measurement) this.dragLabel(this.draggedLabelIndex, e);
       }
     };
   },
@@ -564,25 +1142,24 @@ export default {
 
         if (this.images.length === 0) {
           alert("No images found in IIIF manifest.");
-        } else {
-          this.annotationsByPage = new Array(this.images.length)
-            .fill()
-            .map(() => []);
-          this.comments = new Array(this.images.length).fill().map(() => []);
+          return;
         }
+        this.annotationsByPage = new Array(this.images.length).fill().map(() => []);
+        this.comments = new Array(this.images.length).fill().map(() => []);
       } catch (e) {
         alert("Error fetching IIIF manifest: " + e.message);
       }
     },
 
-    // geometry helpers
+    /* ---------- Helpers ---------- */
     getMousePosition(event) {
-      const el = this.$refs.viewer?.$el;
-      if (!el) return { x: 0, y: 0 };
-      const rect = el.getBoundingClientRect();
+      const viewerElement = this.$refs.viewer;
+      const rect = viewerElement.getBoundingClientRect();
+      const scrollLeft = viewerElement.scrollLeft || 0;
+      const scrollTop = viewerElement.scrollTop || 0;
       return {
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
+        x: event.clientX - rect.left + scrollLeft,
+        y: event.clientY - rect.top + scrollTop,
       };
     },
     formatPoints(points) {
@@ -592,433 +1169,738 @@ export default {
       const v1 = { x: pt1.x - pt2.x, y: pt1.y - pt2.y };
       const v2 = { x: pt3.x - pt2.x, y: pt3.y - pt2.y };
       const dot = v1.x * v2.x + v1.y * v2.y;
-      const m1 = Math.sqrt(v1.x ** 2 + v1.y ** 2);
-      const m2 = Math.sqrt(v2.x ** 2 + v2.y ** 2);
-      const rad = Math.acos(dot / (m1 * m2));
-      return ((rad * 180) / Math.PI).toFixed(2);
+      const mag1 = Math.hypot(v1.x, v1.y);
+      const mag2 = Math.hypot(v2.x, v2.y);
+      const angleRad = Math.acos(Math.max(-1, Math.min(1, dot / (mag1 * mag2))));
+      return ((angleRad * 180) / Math.PI).toFixed(2);
+    },
+    isHorizontalLabel(label) {
+      return ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight"].includes(label);
+    },
+    generateRandomColor() {
+      const palette = ["#E69F00","#56B4E9","#009E73","#F0E442","#0072B2","#D55E00","#CC79A7"];
+      this._lastColor = this._lastColor || null;
+      const pool = palette.filter(c => c !== this._lastColor);
+      const selected = pool[Math.floor(Math.random()*pool.length)];
+      this._lastColor = selected;
+      return selected;
+    },
+    parseBankKey(key) {
+      const [kind, ref] = String(key).split(":");
+      return { kind, ref };
     },
 
-    // toolbar + tools
-    selectTool(tool, event) {
+    /* ----- Bank helpers ----- */
+    camelToTitle(key) {
+      if (!key) return "";
+      return key
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .replace(/^./, (s) => s.toUpperCase());
+    },
+    colorToName(color) {
+      if (!color) return "Color";
+      const c = color.toLowerCase();
+
+      // common trace palette (from generateRandomColor)
+      const map = {
+        "#e69f00": "Orange",
+        "#56b4e9": "Sky",
+        "#009e73": "Green",
+        "#f0e442": "Yellow",
+        "#0072b2": "Blue",
+        "#d55e00": "Rust",
+        "#cc79a7": "Magenta",
+      };
+
+      // try exact hex first
+      if (map[c]) return map[c];
+
+      // try rgba swatches used for bands (just rough labels)
+      if (c.includes("0, 255, 0")) return "Green";
+      if (c.includes("0, 0, 255")) return "Blue";
+      if (c.includes("255, 165, 0")) return "Orange";
+      if (c.includes("255, 0, 0")) return "Red";
+      if (c.includes("128, 0, 128")) return "Purple";
+      if (c.includes("0, 255, 255")) return "Cyan";
+      if (c.includes("255, 0, 255")) return "Pink";
+      if (c.includes("100, 100, 255")) return "Indigo";
+      if (c.includes("255, 100, 100")) return "Coral";
+
+      return "Color";
+    },
+
+    /* ---------- Toolbar ---------- */
+    selectTool(tool) {
       if (!this.currentImage) return;
-      this.currentTool = tool;
+
+      // reset non-related modes
+      const resetAll = () => {
+        this.traceModeActive = false;
+        this.measureModeActive = false;
+        this.highlightModeActive = false;
+        this.underlineModeActive = false;
+        this.commentModeActive = false;
+        this.lengthMeasurementActive = false;
+        this.isMeasuring = false;
+        this.croppingStarted = false;
+        this.cropButtonClicked = false;
+        this.showStatsPanel = false;
+      };
 
       if (tool === "trace") {
-        const next = !this.traceModeActive;
-        this.traceModeActive = next;
-        if (next) this.showPenSelection();
-        this.showTraces = true;
-        this.measureModeActive = false;
-        this.showToolMessage(
-          next ? "Trace mode active. Click again to deactivate."
-               : "Trace mode deactivated."
-        );
+        if (this.traceModeActive) {
+          // Toggle OFF
+          this.traceModeActive = false;
+          this.showTracePopup = false;
+          this.showToolMessage("Trace mode off.");
+          return;
+        }
+        resetAll();
+        // Open pen picker first
+        this.showTracePopup = true;
         return;
       }
 
       if (tool === "measure") {
-        const becomingActive = !this.measureModeActive;
-        this.measureModeActive = !this.measureModeActive;
-        this.showTraces = true;
-        this.measurePoints = [];
-        this.draggingPoint = -1;
-        this.traceModeActive = false;
-        if (becomingActive) {
-          this.showAngleLabelPopup = true; // choose or create the label (which is the ID)
-        } else {
-          this.activeAngleLabel = ""; // cleared when turning off
-        }
-        this.showToolMessage(
-          this.measureModeActive ? "Angle measurement active."
-                                 : "Angle measurement deactivated."
-        );
+        resetAll();
+        // open label chooser first
+        this.showAngleLabelPopup = true;
         return;
       }
 
       if (tool === "highlight") {
+        resetAll();
         this.highlightModeActive = true;
-        this.underlineModeActive = false;
+        this.showToolMessage("Highlight: click-start then click-end.");
         return;
       }
 
       if (tool === "underline") {
+        resetAll();
         this.underlineModeActive = true;
-        this.highlightModeActive = false;
+        this.showToolMessage("Underline: click-start then click-end.");
         return;
       }
 
       if (tool === "comment") {
+        resetAll();
         this.commentModeActive = true;
-        const { x, y } = this.getMousePosition(event || { clientX: 0, clientY: 0 });
-        this.currentCommentPosition = { x, y };
-        this.showCommentInput = true;
+        this.showToolMessage("Click anywhere to add a comment.");
+        // comment is placed on next click-down within stage via startTrace
         return;
       }
-
-      // default: turn off
-      this.traceModeActive = false;
-      this.measureModeActive = false;
-      this.highlightModeActive = false;
-      this.underlineModeActive = false;
     },
 
-    showToolMessage(msg) {
-      this.toolMessage = msg;
-      setTimeout(() => (this.toolMessage = ""), 2600);
-    },
-
-    // pen selection
     showPenSelection() {
-      this.showPenSelectionPopup = true;
-      this.selectedPenAngle = null;
-      this.testTracePath = "";
-    },
-    selectPen(angle) {
-      this.selectedPenAngle = angle;
-      switch (angle) {
-        case 25: this.penWidth = 3; this.penHeight = 6; break;
-        case 30: this.penWidth = 4; this.penHeight = 7; break;
-        case 50: this.penWidth = 5; this.penHeight = 8; break;
-        case 80: this.penWidth = 6; this.penHeight = 10; break;
-        case 0:  this.penWidth = 2; this.penHeight = 2; break;
-        default: this.penWidth = 3; this.penHeight = 6;
-      }
-    },
-    startTestTrace(e) {
-      const rect = e.currentTarget.getBoundingClientRect();
-      this.testTracePath = [{ x: e.clientX - rect.left, y: e.clientY - rect.top }];
-      this.isDrawingTest = true;
-    },
-    testTrace(e) {
-      if (!this.isDrawingTest) return;
-      const rect = e.currentTarget.getBoundingClientRect();
-      this.testTracePath.push({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-    },
-    endTestTrace() { this.isDrawingTest = false; },
-    confirmPenSelection() {
-      if (this.selectedPenAngle === null || this.selectedPenAngle === undefined) {
-        alert("Please select a pen angle before confirming.");
-        return;
-      }
-      this.showPenSelectionPopup = false;
+      // Keep UI minimal: set trace active immediately (we already have angles/labels UI elsewhere)
       this.traceModeActive = true;
-      this.testTracePath = "";
-      this.showToolMessage(`Trace mode with ${this.selectedPenAngle}° pen.`);
-    },
-    cancelPenSelection() {
-      this.showPenSelectionPopup = false;
-      this.selectedPenAngle = null;
-      this.testTracePath = "";
+      this.showToolMessage("Trace mode active. Draw freehand on the page.");
     },
 
-    // image load
-    handleImageLoad() {
-      const imgEl = this.$refs.viewer?.$el?.querySelector("img");
-      if (imgEl) {
-        const displayedWidth = imgEl.width;
-        const naturalWidth = imgEl.naturalWidth;
-        this.scalingFactor = displayedWidth / naturalWidth;
-      }
-      this.imageLoaded = true;
+    openHorizontalPopup() {
+      this.showHorizontalPopup = true;
+      this.showVerticalPopup = false;
     },
-
-    // NAV
-    nextPage() {
-      if (this.currentPage < this.totalPages - 1) this.currentPage++;
-    },
-    prevPage() {
-      if (this.currentPage > 0) this.currentPage--;
-    },
-    goToPage() {
-      const newPage = Math.max(1, Math.min(this.pageInput, this.totalPages)) - 1;
-      this.currentPage = newPage;
-    },
-
-    // POPUPS: lengths
-    showLengthPopup(type) {
-      if (type === "horizontal") {
-        this.selectedMeasurement = "ascenders";
-        this.showHorizontalPopup = true;
-        this.showVerticalPopup = false;
-      } else {
-        this.selectedMeasurement = "internalMargin";
-        this.showVerticalPopup = true;
-        this.showHorizontalPopup = false;
-      }
+    openVerticalPopup() {
+      this.showVerticalPopup = true;
+      this.showHorizontalPopup = false;
     },
     hideLengthPopup() {
       this.showHorizontalPopup = false;
       this.showVerticalPopup = false;
     },
+    beginLength(type) {
+      this.selectedMeasurement = type;
+      this.hideLengthPopup();
+      this.startLengthMeasurement();
+    },
+
+    /* ---------- Angle label popup ---------- */
+    confirmNewAngleLabel() {
+      const label = (this.newAngleLabel || "").trim();
+      if (!label) return;
+      if (!this.angleLabels.includes(label)) this.angleLabels.push(label);
+      this.activeAngleLabel = label;
+      this.newAngleLabel = "";
+    },
+    confirmAngleLabel() {
+      if (!this.activeAngleLabel) {
+        this.showToolMessage("Choose or create a label first.");
+        return;
+      }
+      this.showAngleLabelPopup = false;
+      this.measureModeActive = true;
+      this.showToolMessage(`Angle measure: label "${this.activeAngleLabel}". Click 3 points (A, vertex, B).`);
+    },
+    cancelAngleLabel() {
+      this.activeAngleLabel = null;
+      this.showAngleLabelPopup = false;
+      this.measureModeActive = false;
+    },
+
+    confirmPenSelection() {
+  const size = this.penSizes.find(s => s.key === this.selectedPenSize) || this.penSizes[1];
+  this.penWidth  = size.w;
+  this.penHeight = size.h;
+  this.currentNibAngle = this.selectedPenAngle;
+
+  this.showTracePopup = false;
+  this.traceModeActive = true;
+  this.showToolMessage(`Trace: ${size.label} nib at ${this.currentNibAngle}°`);
+},
+cancelPenSelection() {
+  this.showTracePopup = false;
+  this.traceModeActive = false;
+},
+
+    /* ---------- Stats panel ---------- */
+    calculateCurrentPage() {
+      this.showStatsPanel = false;
+      this.showStatisticsPopup(this.getCurrentPageStatistics());
+    },
+    calculateEntireDocument() {
+      this.showStatsPanel = false;
+      this.showStatisticsPopup(this.getEntireDocumentStatistics());
+    },
+
+    runAngleStatistics() {
+      // collect angles by label + scope
+      const gather = [];
+      const pages = this.angleScope === "page" ? [this.currentPage] : Array.from({length:this.totalPages}, (_,i)=>i);
+      pages.forEach(p => {
+        (this.annotationsByPage[p] || []).forEach(a => {
+          if (a.type !== "measure") return;
+          if (this.angleFilterLabel !== "__ALL__" && a.label !== this.angleFilterLabel) return;
+          if (typeof a.angle === "number" || typeof a.angle === "string") {
+            gather.push(parseFloat(a.angle));
+          }
+        });
+      });
+
+      this.angleStatistics = {
+        average: this.calculateAverage(gather),
+        standardDeviation: this.calculateStandardDeviation(gather),
+        mode: this.calculateMode(gather),
+      };
+      this.showAngleFilterPopup = false;
+      this.showAngleStatistics = true;
+    },
+
+    closeAngleStatisticsPopup() {
+      this.showAngleStatistics = false;
+    },
+
+    /* ---------- Length measurement ---------- */
     startLengthMeasurement() {
       this.lengthMeasurementActive = true;
       this.isMeasuring = true;
+      this.showToolMessage(`Measuring "${this.selectedMeasurement}": click-start then click-end.`);
     },
 
-    // POPUPS: angles label + stats
-    onConfirmAngleLabel(label) {
-      this.activeAngleLabel = label;
-      if (label && !this.angleLabels.includes(label)) this.angleLabels.push(label);
-      this.showAngleLabelPopup = false;
-    },
-    onCancelAngleLabel() {
-      this.measureModeActive = false;
-      this.activeAngleLabel = "";
-      this.showAngleLabelPopup = false;
-    },
-    openAngleStatsPicker() {
-      this.showAngleStatsPicker = true;
-    },
-    onConfirmAngleStats(sel) {
-      this.showAngleStatsPicker = false;
-      const { scope, label } = sel;
-      let angles = [];
-      if (scope === "current") {
-        angles = (this.annotationsByPage[this.currentPage] || []).filter(a => a.type === "measure");
-      } else if (scope === "entire") {
-        angles = this.annotationsByPage.flat().filter(a => a && a.type === "measure");
-      } else if (scope === "byLabel" && label) {
-        angles = this.annotationsByPage.flat().filter(a => a && a.type === "measure" && a.label === label);
-      }
-      const values = angles.map(a => parseFloat(a.angle)).filter(n => !isNaN(n));
-      this.angleStatistics = {
-        average: this.calculateAverage(values),
-        standardDeviation: this.calculateStandardDeviation(values),
-        mode: this.calculateMode(values),
-      };
-      this.showAngleStatistics = true;
-    },
-    onCancelAngleStats() { this.showAngleStatsPicker = false; },
-
-    // Drawing handlers (stage-level)
-startTrace(event) {
-  // 1) Length bands: two-click create rectangle
-  if (this.lengthMeasurementActive) {
-    const { x, y } = this.getMousePosition(event);
-    if (!this.startPoint) {
-      this.startPoint = { x, y };
-      this.currentSquare = {
-        x, y, width: 0, height: 0,
-        color: this.measurementColors[this.selectedMeasurement],
-        label: this.selectedMeasurement,
-      };
-      return;
-    } else {
-      const label = this.selectedMeasurement;
-      if (!this.lengthMeasurements[label]) this.lengthMeasurements[label] = {};
-      if (!this.lengthMeasurements[label][this.currentPage]) this.lengthMeasurements[label][this.currentPage] = [];
-      this.lengthMeasurements[label][this.currentPage].push({
-        ...this.currentSquare,
-        type: "length",
-        id: Date.now() + Math.random(),
-      });
-      this.startPoint = null;
-      this.currentSquare = null;
-      this.lengthMeasurementActive = false;
-      this.isMeasuring = false;
-      return;
-    }
-  }
-
-  // 2) Crop start
-  if (this.croppingStarted && this.cropButtonClicked && !this.croppedImage) {
-    const { x, y } = this.getMousePosition(event);
-    this.startPoint = { x, y };
-    this.currentSquare = { x, y, width: 0, height: 0 };
-    return;
-  }
-
-  // 3) Highlight / Underline: two-click flow
-  if (this.highlightModeActive || this.underlineModeActive) {
-    if (this.isFirstClick) {
+    /* ---------- Comments ---------- */
+    startComment(event) {
       const { x, y } = this.getMousePosition(event);
-      this.startPoint = { x, y };
-      if (this.highlightModeActive) {
-        this.currentSquare = { x, y, width: 0, height: 0 };
-      } else {
-        this.currentUnderline = { x, y, width: 0, height: 2 };
-      }
-      this.isFirstClick = false;
-      return;
-    } else {
-      if (this.highlightModeActive && this.currentSquare) {
-        this.annotationsByPage[this.currentPage].push({ type: "highlight", ...this.currentSquare });
-        this.currentSquare = null;
-      } else if (this.underlineModeActive && this.currentUnderline) {
-        this.annotationsByPage[this.currentPage].push({ type: "underline", ...this.currentUnderline });
-        this.currentUnderline = null;
-      }
-      this.isFirstClick = true;
-      this.highlightModeActive = false;
-      this.underlineModeActive = false;
-      return;
-    }
-  }
-
-  // 4) Trace start (freehand)
-  if (this.traceModeActive) {
-    const { x, y } = this.getMousePosition(event);
-    this.currentStroke = {
-      points: [{ x, y }],
-      color: this.generateRandomColor(),
-      penWidth: this.penWidth,
-      penHeight: this.penHeight,
-    };
-    return;
-  }
-
-  // 5) Measure Angle: start drag on existing point OR add new point
-  if (this.measureModeActive) {
-    const { x, y } = this.getMousePosition(event);
-
-    // Try to grab an existing vertex first
-    const nearest = this.findNearestPoint(x, y, 10);
-    if (nearest.annotationIndex !== -1) {
-      this.editingAnnotationIndex = nearest.annotationIndex;
-      this.draggingPoint = nearest.pointIndex;
-
-      const ann = this.annotationsByPage[this.currentPage][this.editingAnnotationIndex];
-      this.measurePoints = [...ann.points]; // work on local copy while dragging
-      return;
-    }
-
-    // Otherwise: create a new angle (collect up to 3 points)
-    if (this.measurePoints.length >= 3) return;
-    this.measurePoints.push({ x, y });
-
-    if (this.measurePoints.length === 3) {
-      this.calculatedAngle = this.calculateAngle(
-        this.measurePoints[0],
-        this.measurePoints[1],
-        this.measurePoints[2]
-      );
-      this.annotationsByPage[this.currentPage].push({
-        type: "measure",
-        points: [...this.measurePoints],
-        angle: this.calculatedAngle,
-        label: this.activeAngleLabel || "Unlabeled",
+      this.currentCommentPosition = { x, y };
+      this.showCommentInput = true;
+    },
+    addComment() {
+      if (!this.currentCommentText) return;
+      if (!this.comments[this.currentPage]) this.comments[this.currentPage] = [];
+      this.comments[this.currentPage].push({
+        text: this.currentCommentText,
+        x: this.currentCommentPosition.x,
+        y: this.currentCommentPosition.y + 100,
       });
+      this.currentCommentText = "";
+      this.showCommentInput = false;
+    },
+    cancelComment() {
+      this.currentCommentText = "";
+      this.currentCommentPosition = null;
+      this.showCommentInput = false;
+    },
+    startDraggingComment(index, event) {
+      this.draggingCommentIndex = index;
+      const comment = this.comments[this.currentPage][index];
+      this.dragOffset = { x: event.clientX - comment.x, y: event.clientY - comment.y };
+    },
+    dragComment(event) {
+      if (this.draggingCommentIndex !== null) {
+        const comment = this.comments[this.currentPage][this.draggingCommentIndex];
+        comment.x = event.clientX - this.dragOffset.x;
+        comment.y = event.clientY - this.dragOffset.y;
+      }
+    },
+    stopDraggingComment() {
+      this.draggingCommentIndex = null;
+    },
+
+    /* ---------- Clear dropdown ---------- */
+    toggleClearDropdown() {
+      this.showClearDropdown = !this.showClearDropdown;
+    },
+    clearHighlights() {
+      this.annotationsByPage[this.currentPage] = (this.annotationsByPage[this.currentPage] || [])
+        .filter(a => a.type !== "highlight");
+      this.showToolMessage("Highlights cleared.");
+      this.showClearDropdown = false;
+    },
+    clearUnderlines() {
+      this.annotationsByPage[this.currentPage] = (this.annotationsByPage[this.currentPage] || [])
+        .filter(a => a.type !== "underline");
+      this.showToolMessage("Underlines cleared.");
+      this.showClearDropdown = false;
+    },
+    clearComments() {
+      this.comments[this.currentPage] = [];
+      this.showToolMessage("Comments cleared.");
+      this.showClearDropdown = false;
+    },
+    clearTraces() {
+      this.annotationsByPage[this.currentPage] = (this.annotationsByPage[this.currentPage] || [])
+        .filter(a => a.type !== "trace");
+      this.showToolMessage("Traces cleared.");
+      this.showClearDropdown = false;
+    },
+    clearAngles() {
+      this.annotationsByPage[this.currentPage] = (this.annotationsByPage[this.currentPage] || [])
+        .filter(a => a.type !== "measure");
+      this.showToolMessage("Angles cleared.");
+      this.showClearDropdown = false;
+    },
+    clearHorizontalLengths() {
+      ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight"].forEach((t)=>{
+        if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage];
+      });
+      this.showToolMessage("Horizontal lengths cleared.");
+      this.showClearDropdown = false;
+    },
+    clearVerticalLengths() {
+      ["internalMargin","intercolumnSpaces"].forEach((t)=>{
+        if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage];
+      });
+      this.showToolMessage("Vertical lengths cleared.");
+      this.showClearDropdown = false;
+    },
+    clearAll() {
+      this.annotationsByPage[this.currentPage] = [];
+      this.comments[this.currentPage] = [];
+      const all = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","internalMargin","intercolumnSpaces","lineHeight","minimumHeight"];
+      all.forEach(t => { if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage]; });
+      this.strokes = [];
       this.measurePoints = [];
-    }
-    return;
-  }
-},
+      this.calculatedAngle = 0;
+      this.showToolMessage("All annotations cleared.");
+      this.showClearDropdown = false;
+    },
 
+    /* ---------- Label drag for length badges ---------- */
+    startLabelDrag(id, event) {
+      this.draggedLabelIndex = id;
+      const pos = this.labelPositions[id] || { x: 15, y: 15 };
+      this.labelDragOffset = { x: event.clientX - pos.x, y: event.clientY - pos.y };
+      window.addEventListener("mousemove", this._onLabelDragMove);
+      window.addEventListener("mouseup", this.stopLabelDrag);
+    },
+    dragLabel(id, event) {
+      if (this.draggedLabelIndex !== id) return;
+      const x = event.clientX - this.labelDragOffset.x;
+      const y = event.clientY - this.labelDragOffset.y;
+      this.labelPositions[id] = { x, y };
+    },
+    stopLabelDrag() {
+      this.draggedLabelIndex = null;
+      window.removeEventListener("mousemove", this._onLabelDragMove);
+      window.removeEventListener("mouseup", this.stopLabelDrag);
+    },
 
-trace(event) {
-  // 1) Crop: dynamic rectangle sizing
-  if (this.startPoint && this.cropButtonClicked && this.croppingStarted && !this.croppedImage) {
-    const { x, y } = this.getMousePosition(event);
-    this.currentSquare = {
-      x: Math.min(x, this.startPoint.x),
-      y: Math.min(y, this.startPoint.y),
-      width: Math.abs(x - this.startPoint.x),
-      height: Math.abs(y - this.startPoint.y),
-    };
-  }
+    /* ---------- Paging ---------- */
+    nextPage() {
+      if (this.currentPage < this.totalPages - 1) {
+        this.currentPage++;
+        if (!this.comments[this.currentPage]) this.comments[this.currentPage] = [];
+      }
+    },
+    prevPage() {
+      if (this.currentPage > 0) {
+        this.currentPage--;
+        if (!this.comments[this.currentPage]) this.comments[this.currentPage] = [];
+      }
+    },
+    goToPage(pageNumber = null) {
+      const targetPage = pageNumber !== null ? pageNumber : this.pageInput;
+      const newPage = Math.max(1, Math.min(targetPage, this.totalPages)) - 1;
+      this.currentPage = newPage;
+      this.pageInput = newPage + 1; // keep pageInput in sync
+    },
 
-  // 2) Highlight dynamic box
-  if (this.highlightModeActive && this.currentSquare) {
-    const { x, y } = this.getMousePosition(event);
-    this.currentSquare = {
-      ...this.currentSquare,
-      x: Math.min(x, this.startPoint.x),
-      y: Math.min(y, this.startPoint.y),
-      width: Math.abs(x - this.startPoint.x),
-      height: Math.abs(y - this.startPoint.y),
-    };
-  }
-
-  // 3) Underline dynamic width
-  if (this.underlineModeActive && this.currentUnderline) {
-    const { x } = this.getMousePosition(event);
-    this.currentUnderline = {
-      ...this.currentUnderline,
-      x: Math.min(x, this.startPoint.x),
-      width: Math.abs(x - this.startPoint.x),
-    };
-  }
-
-  // 4) Length bands: dynamic rectangle
-  if (this.lengthMeasurementActive && this.startPoint) {
-    const { x, y } = this.getMousePosition(event);
-    this.currentSquare = {
-      x: Math.min(x, this.startPoint.x),
-      y: Math.min(y, this.startPoint.y),
-      width: Math.abs(x - this.startPoint.x),
-      height: Math.abs(y - this.startPoint.y),
-      color: this.measurementColors[this.selectedMeasurement],
-      label: this.selectedMeasurement,
-    };
-  }
-
-  // 5) Trace freehand path
-  if (this.traceModeActive && this.currentStroke) {
-    const { x, y } = this.getMousePosition(event);
-    this.currentStroke.points.push({ x, y });
-  }
-
-  // 6) Drag existing angle vertex (live update)
-  if (this.measureModeActive && this.draggingPoint !== -1) {
-    const { x, y } = this.getMousePosition(event);
-    // Update temp copy
-    this.measurePoints[this.draggingPoint] = { x, y };
-
-    // If editing an existing annotation, update it live
-    if (this.editingAnnotationIndex !== -1) {
-      const ann = this.annotationsByPage[this.currentPage][this.editingAnnotationIndex];
-
-      // Ensure measurePoints has 3 vertices
-      if (this.measurePoints.length !== 3) {
-        this.measurePoints = [...ann.points];
-        this.measurePoints[this.draggingPoint] = { x, y };
+    /* ---------- Stage interactions (DROP-IN versions) ---------- */
+    startTrace(event) {
+      // MOVE MODE
+      if (this.moveModeActive && this.bankSelectedKeys.length > 0) {
+        this.moveStartPos = this.getMousePosition(event);
+        return;
       }
 
-      const newAngle =
-        this.measurePoints.length === 3
-          ? this.calculateAngle(this.measurePoints[0], this.measurePoints[1], this.measurePoints[2])
-          : ann.angle;
+      // COMMENT PLACEMENT
+      if (this.commentModeActive) {
+        this.startComment(event);
+        return;
+      }
 
-      this.annotationsByPage[this.currentPage][this.editingAnnotationIndex] = {
-        ...ann,
-        points: [...this.measurePoints],
-        angle: newAngle,
-      };
-    }
-  }
-},
+      // LENGTH BANDS
+      if (this.lengthMeasurementActive) {
+        const { x, y } = this.getMousePosition(event);
+        if (!this.startPoint) {
+          this.startPoint = { x, y };
+          this.currentSquare = {
+            x, y, width: 0, height: 0,
+            color: this.measurementColors[this.selectedMeasurement],
+            label: this.selectedMeasurement,
+          };
+          return;
+        } else {
+          const label = this.selectedMeasurement;
+          if (!this.lengthMeasurements[label]) this.lengthMeasurements[label] = {};
+          if (!this.lengthMeasurements[label][this.currentPage]) this.lengthMeasurements[label][this.currentPage] = [];
+          this.lengthMeasurements[label][this.currentPage].push({
+            ...this.currentSquare,
+            type: "length",
+            id: Date.now() + Math.random(),
+          });
+          this.startPoint = null;
+          this.currentSquare = null;
+          this.lengthMeasurementActive = false;
+          this.isMeasuring = false;
+          return;
+        }
+      }
 
+      // CROP START
+      if (this.croppingStarted && this.cropButtonClicked && !this.croppedImage) {
+        const { x, y } = this.getMousePosition(event);
+        this.startPoint = { x, y };
+        this.currentSquare = { x, y, width: 0, height: 0 };
+        return;
+      }
 
-endTrace() {
-  // 1) Finish trace stroke
-  if (this.traceModeActive && this.currentStroke) {
-    this.annotationsByPage[this.currentPage].push({
-      type: "trace",
-      points: this.currentStroke.points,
-      color: this.currentStroke.color,
-      penWidth: this.currentStroke.penWidth,
-      penHeight: this.currentStroke.penHeight,
-    });
-    this.currentStroke = null;
-  }
+      // HIGHLIGHT / UNDERLINE
+      if (this.highlightModeActive || this.underlineModeActive) {
+        if (!this.startPoint) {
+          const { x, y } = this.getMousePosition(event);
+          this.startPoint = { x, y };
+          if (this.highlightModeActive) this.currentSquare = { x, y, width: 0, height: 0 };
+          else this.currentUnderline = { x, y, width: 0, height: 2 };
+          return;
+        } else {
+          if (this.highlightModeActive && this.currentSquare) {
+            this.annotationsByPage[this.currentPage].push({ type: "highlight", ...this.currentSquare });
+            this.currentSquare = null;
+          } else if (this.underlineModeActive && this.currentUnderline) {
+            this.annotationsByPage[this.currentPage].push({ type: "underline", ...this.currentUnderline });
+            this.currentUnderline = null;
+          }
+          this.startPoint = null;
+          this.highlightModeActive = false;
+          this.underlineModeActive = false;
+          return;
+        }
+      }
 
-  // 2) Finish angle vertex drag
-  if (this.measureModeActive && this.draggingPoint !== -1) {
-    this.draggingPoint = -1;
-    this.editingAnnotationIndex = -1;
-    this.measurePoints = []; // clear temp after finishing drag
-  }
+      // TRACE
+      if (this.traceModeActive) {
+        const { x, y } = this.getMousePosition(event);
+        this.currentStroke = {
+          points: [{ x, y }],
+          color: this.generateRandomColor(),
+          penWidth: this.penWidth,
+          penHeight: this.penHeight,
+          nibAngle: this.currentNibAngle,
+        };
+        return;
+      }
 
-  // 3) Finalize crop, generate preview popup
-  if ((this.croppingStarted || this.currentSquare) && this.cropButtonClicked && !this.croppedImage) {
-    this.generateCroppedFromCurrentSquare();
-    this.croppingStarted = false;
-    this.cropButtonClicked = false;
-    this.currentSquare = null;
-    this.startPoint = null;
-  }
-},
+      // MEASURE ANGLE
+      if (this.measureModeActive) {
+        const { x, y } = this.getMousePosition(event);
+        const nearest = this.findNearestPoint(x, y, 10);
+        if (nearest.annotationIndex !== -1) {
+          this.editingAnnotationIndex = nearest.annotationIndex;
+          this.draggingPoint = nearest.pointIndex;
+          const ann = this.annotationsByPage[this.currentPage][this.editingAnnotationIndex];
+          this.measurePoints = [...ann.points];
+          return;
+        }
+        if (this.measurePoints.length >= 3) return;
+        this.measurePoints.push({ x, y });
+        if (this.measurePoints.length === 3) {
+          this.calculatedAngle = this.calculateAngle(this.measurePoints[0], this.measurePoints[1], this.measurePoints[2]);
+          this.annotationsByPage[this.currentPage].push({
+            type: "measure",
+            points: [...this.measurePoints],
+            angle: this.calculatedAngle,
+            label: this.activeAngleLabel || "Unlabeled",
+          });
+          // add label to list if new
+          if (this.activeAngleLabel && !this.angleLabels.includes(this.activeAngleLabel)) {
+            this.angleLabels.push(this.activeAngleLabel);
+          }
+          this.measurePoints = [];
+        }
+        return;
+      }
+    },
 
+    trace(event) {
+      // MOVE MODE: show live movement preview
+      if (this.moveModeActive && this.bankSelectedKeys.length > 0 && this.moveStartPos) {
+        const currentPos = this.getMousePosition(event);
+        this.currentMoveDelta = {
+          x: currentPos.x - this.moveStartPos.x,
+          y: currentPos.y - this.moveStartPos.y,
+        };
+        return;
+      }
+
+      // CROP dynamic
+      if (this.startPoint && this.cropButtonClicked && this.croppingStarted && !this.croppedImage) {
+        const { x, y } = this.getMousePosition(event);
+        this.currentSquare = {
+          x: Math.min(x, this.startPoint.x),
+          y: Math.min(y, this.startPoint.y),
+          width: Math.abs(x - this.startPoint.x),
+          height: Math.abs(y - this.startPoint.y),
+        };
+      }
+
+      // HIGHLIGHT dynamic
+      if (this.highlightModeActive && this.currentSquare) {
+        const { x, y } = this.getMousePosition(event);
+        this.currentSquare = {
+          ...this.currentSquare,
+          x: Math.min(x, this.startPoint.x),
+          y: Math.min(y, this.startPoint.y),
+          width: Math.abs(x - this.startPoint.x),
+          height: Math.abs(y - this.startPoint.y),
+        };
+      }
+
+      // UNDERLINE dynamic
+      if (this.underlineModeActive && this.currentUnderline) {
+        const { x } = this.getMousePosition(event);
+        this.currentUnderline = {
+          ...this.currentUnderline,
+          x: Math.min(x, this.startPoint.x),
+          width: Math.abs(x - this.startPoint.x),
+        };
+      }
+
+      // BANDS dynamic
+      if (this.lengthMeasurementActive && this.startPoint) {
+        const { x, y } = this.getMousePosition(event);
+        this.currentSquare = {
+          x: Math.min(x, this.startPoint.x),
+          y: Math.min(y, this.startPoint.y),
+          width: Math.abs(x - this.startPoint.x),
+          height: Math.abs(y - this.startPoint.y),
+          color: this.measurementColors[this.selectedMeasurement],
+          label: this.selectedMeasurement,
+        };
+      }
+
+      // TRACE dynamic
+      if (this.traceModeActive && this.currentStroke) {
+        const { x, y } = this.getMousePosition(event);
+        this.currentStroke.points.push({ x, y });
+      }
+
+      // ANGLE drag existing vertex
+      if (this.measureModeActive && this.draggingPoint !== -1) {
+        const { x, y } = this.getMousePosition(event);
+        this.measurePoints[this.draggingPoint] = { x, y };
+        if (this.editingAnnotationIndex !== -1) {
+          const ann = this.annotationsByPage[this.currentPage][this.editingAnnotationIndex];
+          if (this.measurePoints.length !== 3) {
+            this.measurePoints = [...ann.points];
+            this.measurePoints[this.draggingPoint] = { x, y };
+          }
+          const newAngle =
+            this.measurePoints.length === 3
+              ? this.calculateAngle(this.measurePoints[0], this.measurePoints[1], this.measurePoints[2])
+              : ann.angle;
+
+          this.annotationsByPage[this.currentPage][this.editingAnnotationIndex] = {
+            ...ann,
+            points: [...this.measurePoints],
+            angle: newAngle,
+          };
+        }
+      }
+    },
+
+    endTrace(event) {
+      // MOVE MODE: apply delta
+      if (this.moveModeActive && this.bankSelectedKeys.length > 0 && this.moveStartPos) {
+        const endPos = this.getMousePosition(event);
+        const dx = endPos.x - this.moveStartPos.x;
+        const dy = endPos.y - this.moveStartPos.y;
+        this.applyMoveDelta(dx, dy);
+        this.moveStartPos = null;
+        this.currentMoveDelta = { x: 0, y: 0 };
+        this.disableMoveMode();
+        return;
+      }
+
+      // TRACE finalize
+      if (this.traceModeActive && this.currentStroke) {
+        this.annotationsByPage[this.currentPage].push({
+          type: "trace",
+          points: this.currentStroke.points,
+          color: this.currentStroke.color,
+          penWidth: this.currentStroke.penWidth,
+          penHeight: this.currentStroke.penHeight,
+          nibAngle: this.currentStroke.nibAngle,
+        });
+        this.currentStroke = null;
+      }
+
+      // ANGLE drag end
+      if (this.measureModeActive && this.draggingPoint !== -1) {
+        this.draggingPoint = -1;
+        this.editingAnnotationIndex = -1;
+        this.measurePoints = [];
+      }
+
+      // CROP finalize
+      if ((this.croppingStarted || this.currentSquare) && this.cropButtonClicked && !this.croppedImage) {
+        this.generateCroppedFromCurrentSquare();
+        this.croppingStarted = false;
+        this.cropButtonClicked = false;
+        this.currentSquare = null;
+        this.startPoint = null;
+      }
+    },
+
+    /* ---------- Angle helpers ---------- */
+    findNearestPoint(x, y, threshold = 10) {
+      const all = (this.annotationsByPage[this.currentPage] || [])
+        .map((a, i) => ({ a, i }))
+        .filter(({ a }) => a && a.type === "measure");
+
+      let best = { annotationIndex: -1, pointIndex: -1, dist: Infinity };
+      all.forEach(({ a, i }) => {
+        a.points.forEach((p, pi) => {
+          const d = Math.hypot(x - p.x, y - p.y);
+          if (d < threshold && d < best.dist) best = { annotationIndex: i, pointIndex: pi, dist: d };
+        });
+      });
+      return { annotationIndex: best.annotationIndex, pointIndex: best.pointIndex };
+    },
+
+    /* ---------- Move selected ---------- */
+    enableMoveMode() {
+      if (this.bankSelectedKeys.length === 0) return;
+      this.moveModeActive = true;
+      this.showToolMessage("Move mode: drag on the image to reposition selected items.");
+    },
+    disableMoveMode() {
+      this.moveModeActive = false;
+      this.moveStartPos = null;
+    },
+    applyMoveDelta(dx, dy) {
+      const page = this.currentPage;
+      this.bankSelectedKeys.forEach((k) => {
+        const { kind, ref } = this.parseBankKey(k);
+        if (kind === "a") {
+          const i = +ref;
+          const a = this.annotationsByPage[page]?.[i];
+          if (!a) return;
+          if (a.type === "highlight" || a.type === "underline") {
+            a.x += dx; a.y += dy;
+          } else if (a.type === "trace" || a.type === "measure") {
+            a.points = a.points.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+          }
+        }
+        if (kind === "c") {
+          const i = +ref;
+          const c = this.comments[page]?.[i];
+          if (!c) return;
+          c.x += dx; c.y += dy;
+        }
+        if (kind === "l") {
+          const id = ref;
+          for (const label in this.lengthMeasurements) {
+            const arr = this.lengthMeasurements[label]?.[page];
+            if (!Array.isArray(arr)) continue;
+            const m = arr.find((mm) => String(mm.id) === String(id));
+            if (m) {
+              m.x += dx; m.y += dy;
+              if (this.labelPositions[id]) {
+                this.labelPositions[id] = {
+                  x: (this.labelPositions[id].x || 0) + dx,
+                  y: (this.labelPositions[id].y || 0) + dy,
+                };
+              }
+              break;
+            }
+          }
+        }
+      });
+    },
+    deleteSelectedFromBank() {
+      if (this.bankSelectedKeys.length === 0) return;
+      const page = this.currentPage;
+
+      const annIdxs = [];
+      const cmtIdxs = [];
+      const lengthIds = [];
+
+      this.bankSelectedKeys.forEach((k) => {
+        const { kind, ref } = this.parseBankKey(k);
+        if (kind === "a") annIdxs.push(+ref);
+        if (kind === "c") cmtIdxs.push(+ref);
+        if (kind === "l") lengthIds.push(ref);
+      });
+
+      if (annIdxs.length) {
+        const sorted = [...annIdxs].sort((a,b)=>b-a);
+        sorted.forEach((i) => {
+          if (this.annotationsByPage[page]?.[i] != null) {
+            this.annotationsByPage[page].splice(i, 1);
+          }
+        });
+      }
+      if (cmtIdxs.length) {
+        const sorted = [...cmtIdxs].sort((a,b)=>b-a);
+        sorted.forEach((i) => {
+          if (this.comments[page]?.[i] != null) {
+            this.comments[page].splice(i, 1);
+          }
+        });
+      }
+      if (lengthIds.length) {
+        for (const label in this.lengthMeasurements) {
+          const pageArr = this.lengthMeasurements[label]?.[page];
+          if (Array.isArray(pageArr)) {
+            this.lengthMeasurements[label][page] = pageArr.filter((m) => !lengthIds.includes(String(m.id)));
+          }
+        }
+        lengthIds.forEach((id) => { if (this.labelPositions[id]) delete this.labelPositions[id]; });
+      }
+
+      this.bankSelectedKeys = [];
+    },
+
+    /* ---------- Image & crop ---------- */
+    handleImageLoad() {
+      const imageElement = this.$refs.image;
+      if (imageElement) {
+        const displayedWidth = imageElement.width;
+        const naturalWidth = imageElement.naturalWidth;
+        this.scalingFactor = displayedWidth / naturalWidth;
+      }
+      this.imageLoaded = true;
+    },
     startCrop() {
       this.croppingStarted = true;
       this.cropButtonClicked = true;
@@ -1026,56 +1908,48 @@ endTrace() {
       this.startPoint = null;
       this.showToolMessage("Click and drag to crop.");
     },
-
     async generateCroppedFromCurrentSquare() {
-      if (!this.currentSquare) return;
       const { x, y, width, height } = this.currentSquare;
-      const imgEl = this.$refs.viewer?.$el?.querySelector("img");
-      if (!imgEl) return;
-
-      const naturalWidth = imgEl.naturalWidth;
-      const naturalHeight = imgEl.naturalHeight;
-      const rect = this.$refs.viewer.$el.getBoundingClientRect();
+      const imageElement = this.$refs.image;
+      const naturalWidth = imageElement.naturalWidth;
+      const naturalHeight = imageElement.naturalHeight;
+      const rect = imageElement.getBoundingClientRect();
       const scaleX = naturalWidth / rect.width;
       const scaleY = naturalHeight / rect.height;
 
-      const sx = x * scaleX;
-      const sy = y * scaleY;
-      const sw = width * scaleX;
-      const sh = height * scaleY;
+      const scaledX = (x - 0) * scaleX; // since x,y already relative to viewer
+      const scaledY = y * scaleY;
+      const scaledWidth = width * scaleX;
+      const scaledHeight = height * scaleY;
 
       const canvas = document.createElement("canvas");
-      canvas.width = sw;
-      canvas.height = sh;
+      canvas.width = scaledWidth;
+      canvas.height = scaledHeight;
       const ctx = canvas.getContext("2d");
 
-      const srcImg = new Image();
-      srcImg.crossOrigin = "anonymous";
-      srcImg.src = this.currentImage;
-
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = this.currentImage;
       await new Promise((resolve, reject) => {
-        srcImg.onload = () => {
-          ctx.drawImage(srcImg, sx, sy, sw, sh, 0, 0, sw, sh);
+        img.onload = () => {
+          ctx.drawImage(
+            img,
+            scaledX,
+            scaledY,
+            scaledWidth,
+            scaledHeight,
+            0,
+            0,
+            scaledWidth,
+            scaledHeight
+          );
           this.croppedImage = canvas.toDataURL("image/png");
           resolve();
         };
-        srcImg.onerror = reject;
+        img.onerror = reject;
       });
-
-      // keep SVG version for export
-      this.croppedSvg = `
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${sw} ${sh}" width="${sw}" height="${sh}">
-          <image href="${this.currentImage}" x="${-sx}" y="${-sy}" width="${naturalWidth}" height="${naturalHeight}" />
-        </svg>
-      `;
-      // popup sizing
-      const popupWidth = (window.innerWidth * 2) / 3;
-      const popupHeight = (sh / sw) * popupWidth;
-      this.popupDimensions = { width: popupWidth, height: popupHeight };
     },
-
-    // Save / export
-    async saveCroppedImageAsPNG() {
+    saveCroppedImageAsPNG() {
       const link = document.createElement("a");
       link.href = this.croppedImage;
       link.download = "cropped-image.png";
@@ -1090,22 +1964,11 @@ endTrace() {
       link.click();
       URL.revokeObjectURL(link.href);
     },
-    async saveCroppedImage() {
-      const container = document.querySelector(".cropped-image-container");
-      if (!container) return;
-      const canvas = await html2canvas(container, {
-        useCORS: true,
-        backgroundColor: null,
-        scale: 2,
-      });
-      const dataUrl = canvas.toDataURL("image/png");
-      const link = document.createElement("a");
-      link.href = dataUrl;
-      link.download = "cropped-with-annotations.png";
-      link.click();
+    closeCroppedPopup() {
+      this.croppedImage = null;
     },
-    closeCroppedPopup() { this.croppedImage = null; },
 
+    /* ---------- Save to PDF ---------- */
     async saveAnnotations() {
       try {
         const topBar = document.querySelector(".top-bar");
@@ -1118,21 +1981,21 @@ endTrace() {
         for (let i = 0; i < this.images.length; i++) {
           const annotations = this.annotationsByPage[i] || [];
           const comments = this.comments[i] || [];
-          const hasLengths =
-            Object.values(this.lengthMeasurements).some(obj => obj[i] && obj[i].length);
+          const hasLengths = Object.values(this.lengthMeasurements).some(obj => (obj[i] || []).length > 0);
 
           if (annotations.length === 0 && comments.length === 0 && !hasLengths) continue;
 
           this.currentPage = i;
           await this.$nextTick();
 
-          const viewerEl = this.$refs.viewer?.$el;
-          const canvas = await html2canvas(viewerEl, {
+          const viewer = this.$refs.viewer;
+          const canvas = await html2canvas(viewer, {
             scale: 2,
             useCORS: true,
+            logging: false,
             ignoreElements: (el) =>
               el.classList?.contains("top-bar") ||
-              el.classList?.contains("navigation-bar"),
+              el.classList?.contains("navigation-bar")
           });
 
           const imgData = canvas.toDataURL("image/png");
@@ -1156,415 +2019,247 @@ endTrace() {
       }
     },
 
-    // Clear menus
-    toggleClearDropdown() { this.showClearDropdown = !this.showClearDropdown; },
-    clearHighlights() {
-      this.annotationsByPage[this.currentPage] =
-        this.annotationsByPage[this.currentPage].filter(a => a.type !== "highlight");
-      this.showToolMessage("Highlights cleared.");
-      this.showClearDropdown = false;
-    },
-    clearUnderlines() {
-      this.annotationsByPage[this.currentPage] =
-        this.annotationsByPage[this.currentPage].filter(a => a.type !== "underline");
-      this.showToolMessage("Underlines cleared.");
-      this.showClearDropdown = false;
-    },
-    clearComments() {
-      this.comments[this.currentPage] = [];
-      this.showToolMessage("Comments cleared.");
-      this.showClearDropdown = false;
-    },
-    clearTraces() {
-      this.annotationsByPage[this.currentPage] =
-        this.annotationsByPage[this.currentPage].filter(a => a.type !== "trace");
-      this.showToolMessage("Traces cleared.");
-      this.showClearDropdown = false;
-    },
-    clearAngles() {
-      this.annotationsByPage[this.currentPage] =
-        this.annotationsByPage[this.currentPage].filter(a => a.type !== "measure");
-      this.showToolMessage("Angles cleared.");
-      this.showClearDropdown = false;
-    },
-    clearHorizontalLengths() {
-      const list = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight"];
-      list.forEach(t => { if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage]; });
-      this.showToolMessage("Horizontal lengths cleared.");
-      this.showClearDropdown = false;
-    },
-    clearVerticalLengths() {
-      ["internalMargin","intercolumnSpaces"].forEach(t => {
-        if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage];
-      });
-      this.showToolMessage("Vertical lengths cleared.");
-      this.showClearDropdown = false;
-    },
-    clearAll() {
-      this.annotationsByPage[this.currentPage] = [];
-      this.comments[this.currentPage] = [];
-      ["ascenders","descenders","interlinear","upperMargin","lowerMargin","internalMargin","intercolumnSpaces","lineHeight","minimumHeight"].forEach(t => {
-        if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage];
-      });
-      this.measurePoints = [];
-      this.calculatedAngle = 0;
-      this.showToolMessage("All annotations cleared.");
-      this.showClearDropdown = false;
-    },
-
-    // Calculate statistics (bands)
-    toggleCalculateDropdown() { this.showCalculateDropdown = !this.showCalculateDropdown; },
-    calculateCurrentPage() {
-      this.showCalculateDropdown = false;
-      this.showStatisticsPopup(this.getCurrentPageStatistics());
-    },
-    calculateEntireDocument() {
-      this.showCalculateDropdown = false;
-      this.showStatisticsPopup(this.getEntireDocumentStatistics());
-    },
+    /* ---------- Stats helpers ---------- */
     extractValues(measurements, type) {
-      const vertical = ["internalMargin", "intercolumnSpaces"].includes(type);
-      return measurements.map((m) => (vertical ? m.width : m.height));
-    },
-    getCurrentPageStatistics() {
-      const horizontal = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight"];
       const vertical = ["internalMargin", "intercolumnSpaces"];
-      const stats = {};
-      horizontal.forEach((t) => {
-        if (this.lengthMeasurements[t]?.[this.currentPage]) {
-          const vals = this.extractValues(this.lengthMeasurements[t][this.currentPage], t);
-          stats[t] = {
-            average: this.calculateAverage(vals),
-            standardDeviation: this.calculateStandardDeviation(vals),
-            mode: this.calculateMode(vals),
-          };
-        }
-      });
-      vertical.forEach((t) => {
-        if (this.lengthMeasurements[t]?.[this.currentPage]) {
-          const vals = this.extractValues(this.lengthMeasurements[t][this.currentPage], t);
-          stats[t] = {
-            average: this.calculateAverage(vals),
-            standardDeviation: this.calculateStandardDeviation(vals),
-            mode: this.calculateMode(vals),
-          };
-        }
-      });
-      return stats;
+      const isVertical = vertical.includes(type);
+      // In our rectangles: for horizontal labels we report height; for vertical we report width
+      return measurements.map((m) => (isVertical ? m.width : m.height));
     },
-
-      findNearestPoint(x, y, threshold = 10) {
-    const measures = (this.annotationsByPage[this.currentPage] || [])
-      .map((a, i) => ({ a, i }))
-      .filter(({ a }) => a && a.type === "measure");
-
-    let best = { annotationIndex: -1, pointIndex: -1, dist: Infinity };
-
-    measures.forEach(({ a, i }) => {
-      a.points.forEach((p, pi) => {
-        const d = Math.hypot(x - p.x, y - p.y);
-        if (d < threshold && d < best.dist) {
-          best = { annotationIndex: i, pointIndex: pi, dist: d };
-        }
-      });
-    });
-
-    return { annotationIndex: best.annotationIndex, pointIndex: best.pointIndex };
-  },
-    getEntireDocumentStatistics() {
-      const horizontal = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight"];
-      const vertical = ["internalMargin", "intercolumnSpaces"];
-      const stats = {};
-      horizontal.forEach((t) => {
-        let vals = [];
-        for (let p = 0; p < this.totalPages; p++) {
-          if (this.lengthMeasurements[t]?.[p]) {
-            vals = vals.concat(this.extractValues(this.lengthMeasurements[t][p], t));
-          }
-        }
-        stats[t] = {
-          average: this.calculateAverage(vals),
-          standardDeviation: this.calculateStandardDeviation(vals),
-          mode: this.calculateMode(vals),
-        };
-      });
-      vertical.forEach((t) => {
-        let vals = [];
-        for (let p = 0; p < this.totalPages; p++) {
-          if (this.lengthMeasurements[t]?.[p]) {
-            vals = vals.concat(this.extractValues(this.lengthMeasurements[t][p], t));
-          }
-        }
-        stats[t] = {
-          average: this.calculateAverage(vals),
-          standardDeviation: this.calculateStandardDeviation(vals),
-          mode: this.calculateMode(vals),
-        };
-      });
-      return stats;
-    },
-    showStatisticsPopup(statistics) {
-      this.horizontalStatistics = {};
-      this.verticalStatistics = {};
-      for (const [type, s] of Object.entries(statistics)) {
-        if (["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight"].includes(type)) {
-          this.horizontalStatistics[type] = s;
-        } else if (["internalMargin","intercolumnSpaces"].includes(type)) {
-          this.verticalStatistics[type] = s;
-        }
-      }
-      this.showStatistics = true;
-    },
-    closeStatisticsPopup() { this.showStatistics = false; },
-
-    // labels drag for bands
-    startLabelDrag(id, event) {
-      this.draggedLabelIndex = id;
-      const pos = this.labelPositions[id] || { x: 15, y: 0 };
-      this.labelDragOffset = { x: event.clientX - pos.x, y: event.clientY - pos.y };
-      window.addEventListener("mousemove", this._onLabelDragMove);
-      window.addEventListener("mouseup", this.stopLabelDrag);
-    },
-    dragLabel(id, event) {
-      if (this.draggedLabelIndex !== id) return;
-      const x = event.clientX - this.labelDragOffset.x;
-      const y = event.clientY - this.labelDragOffset.y;
-      this.labelPositions[id] = { x, y };
-    },
-    stopLabelDrag() {
-      this.draggedLabelIndex = null;
-      window.removeEventListener("mousemove", this._onLabelDragMove);
-      window.removeEventListener("mouseup", this.stopLabelDrag);
-    },
-
-    // comments
-    onAddComment(payload) {
-      if (!this.comments[this.currentPage]) this.comments[this.currentPage] = [];
-      this.comments[this.currentPage].push({
-        text: payload.text || "",
-        x: payload.x,
-        y: payload.y,
-      });
-      this.currentCommentText = "";
-      this.showCommentInput = false;
-    },
-    cancelComment() {
-      this.currentCommentText = "";
-      this.currentCommentPosition = null;
-      this.showCommentInput = false;
-    },
-    startDraggingComment({ index, event }) {
-      this.draggingCommentIndex = index;
-      const c = this.comments[this.currentPage][index];
-      this.dragOffset = { x: event.clientX - c.x, y: event.clientY - c.y };
-    },
-    dragComment(event) {
-      if (this.draggingCommentIndex == null) return;
-      const c = this.comments[this.currentPage][this.draggingCommentIndex];
-      c.x = event.clientX - this.dragOffset.x;
-      c.y = event.clientY - this.dragOffset.y;
-    },
-    stopDraggingComment() {
-      this.draggingCommentIndex = null;
-    },
-
-    // cropped popup interactions (highlights / underline / trace / angles)
-    getCroppedMousePosition(event) {
-      const container = document.querySelector(".cropped-image-container");
-      const img = container?.querySelector(".cropped-image");
-      if (!img) return { x: 0, y: 0 };
-      const r = img.getBoundingClientRect();
-      return { x: event.clientX - r.left, y: event.clientY - r.top };
-    },
-    startCroppedAnnotation(event) {
-      if (!this.croppedImage) return;
-      const pos = this.getCroppedMousePosition(event);
-
-      if (this.highlightModeActive || this.underlineModeActive) {
-        if (this.isFirstClick) {
-          this.startPoint = pos;
-          this.isFirstClick = false;
-          if (this.highlightModeActive) {
-            this.croppedCurrentHighlight = { start: pos, current: pos, style: this.getHighlightStyle(pos, pos) };
-          } else {
-            this.croppedCurrentUnderline = { start: pos, current: pos.x, style: this.getUnderlineStyle(pos, pos.x) };
-          }
-        } else {
-          const finalPos = this.getCroppedMousePosition(event);
-          if (this.highlightModeActive) {
-            this.croppedHighlights.push({ style: this.getHighlightStyle(this.startPoint, finalPos) });
-            this.croppedCurrentHighlight = null;
-          } else {
-            this.croppedUnderlines.push({ style: this.getUnderlineStyle(this.startPoint, finalPos.x) });
-            this.croppedCurrentUnderline = null;
-          }
-          this.isFirstClick = true;
-          this.highlightModeActive = false;
-          this.underlineModeActive = false;
-        }
-        return;
-      }
-
-      if (this.traceModeActive) {
-        this.croppedCurrentStroke = { points: [pos], color: this.generateRandomColor() };
-        return;
-      }
-
-      if (this.measureModeActive) {
-        if (this.croppedDraggingPoint !== -1) return;
-        if (this.croppedMeasurePoints.length === 3) {
-          this.croppedMeasures.push({ points: [...this.croppedMeasurePoints], angle: this.croppedCalculatedAngle });
-          this.croppedMeasurePoints = [];
-          this.croppedCalculatedAngle = null;
-        }
-        this.croppedMeasurePoints.push({ x: pos.x, y: pos.y });
-        if (this.croppedMeasurePoints.length === 3) {
-          this.croppedCalculatedAngle = this.calculateAngle(
-            this.croppedMeasurePoints[0], this.croppedMeasurePoints[1], this.croppedMeasurePoints[2]
-          );
-        }
-      }
-    },
-    handleCroppedAnnotation(event) {
-      if (!this.croppedImage) return;
-      const pos = this.getCroppedMousePosition(event);
-
-      if (this.highlightModeActive && this.croppedCurrentHighlight && this.startPoint) {
-        this.croppedCurrentHighlight.style = this.getHighlightStyle(this.startPoint, pos);
-      } else if (this.underlineModeActive && this.croppedCurrentUnderline && this.startPoint) {
-        this.croppedCurrentUnderline.style = this.getUnderlineStyle(this.startPoint, pos.x);
-      }
-
-      if (this.croppedCurrentStroke) this.croppedCurrentStroke.points.push(pos);
-
-      if (this.measureModeActive && this.croppedDraggingPoint !== -1 && this.croppedMeasurePoints.length === 3) {
-        if (this.croppedMeasurePoints[this.croppedDraggingPoint]) {
-          this.croppedMeasurePoints[this.croppedDraggingPoint] = { x: pos.x, y: pos.y };
-          if (this.croppedMeasurePoints.length === 3) {
-            this.croppedCalculatedAngle = this.calculateAngle(
-              this.croppedMeasurePoints[0], this.croppedMeasurePoints[1], this.croppedMeasurePoints[2]
-            );
-          }
-        }
-      }
-    },
-    endCroppedAnnotation() {
-      if (this.croppedCurrentStroke) {
-        this.croppedStrokes.push(this.croppedCurrentStroke);
-        this.croppedCurrentStroke = null;
-      }
-      if (this.measureModeActive && this.croppedDraggingPoint !== -1) this.croppedDraggingPoint = -1;
-
-      if (this.measureModeActive && this.croppedMeasurePoints.length === 3 && this.croppedDraggingPoint === -1) {
-        this.croppedMeasurePoints = [];
-        this.croppedCalculatedAngle = null;
-      }
-    },
-    getHighlightStyle(start, end) {
-      return {
-        left: `${Math.min(start.x, end.x)}px`,
-        top: `${Math.min(start.y, end.y)}px`,
-        width: `${Math.abs(end.x - start.x)}px`,
-        height: `${Math.abs(end.y - start.y)}px`,
-      };
-    },
-    getUnderlineStyle(start, currentX) {
-      return {
-        left: `${Math.min(start.x, currentX)}px`,
-        top: `${start.y}px`,
-        width: `${Math.abs(currentX - start.x)}px`,
-      };
-    },
-
-    // angle editing
-    startDraggingPoint(index, event) {
-      event.preventDefault();
-      event.stopPropagation();
-      this.draggingPoint = index;
-    },
-
-    // colors
-    generateRandomColor() {
-      const palette = ["#E69F00","#56B4E9","#009E73","#F0E442","#0072B2","#D55E00","#CC79A7"];
-      if (!this.lastColor) this.lastColor = null;
-      const avail = palette.filter(c => c !== this.lastColor);
-      const selected = avail[Math.floor(Math.random() * avail.length)];
-      this.lastColor = selected;
-      return selected;
-    },
-
-    // math helpers
     calculateAverage(values) {
-      if (!values?.length) return 0;
-      const nums = values.map(v => +v).filter(v => !isNaN(v));
+      if (!values || values.length === 0) return 0;
+      const nums = values.map(Number).filter(v => !isNaN(v));
       if (!nums.length) return 0;
       return nums.reduce((a,b)=>a+b,0) / nums.length;
     },
     calculateStandardDeviation(values) {
-      if (!values?.length) return 0;
-      const nums = values.map(v => +v).filter(v => !isNaN(v));
+      if (!values || values.length === 0) return 0;
+      const nums = values.map(Number).filter(v => !isNaN(v));
       if (!nums.length) return 0;
       const avg = this.calculateAverage(nums);
-      const variance = nums.reduce((acc,v)=>acc + (v-avg)**2, 0) / nums.length;
+      const variance = nums.reduce((acc,v)=>acc + (v-avg)*(v-avg), 0) / nums.length;
       return Math.sqrt(variance);
     },
     calculateMode(values) {
-      if (!values?.length) return "No mode";
-      const nums = values.map(v => +v).filter(v => !isNaN(v));
+      if (!values || values.length === 0) return "No mode";
+      const nums = values.map(Number).filter(v => !isNaN(v));
       if (!nums.length) return "No mode";
       const freq = {};
-      nums.forEach(v => freq[v] = (freq[v]||0)+1);
-      const max = Math.max(...Object.values(freq));
-      if (max === 1) return "No mode";
-      const modes = Object.keys(freq).filter(k => freq[k] === max);
-      return parseFloat(Math.min(...modes));
+      nums.forEach(v => { freq[v] = (freq[v] || 0) + 1; });
+      const maxF = Math.max(...Object.values(freq));
+      if (maxF === 1) return "No mode";
+      const modes = Object.keys(freq).filter(k => freq[k] === maxF).map(Number);
+      return Math.min(...modes);
+    },
+    showStatisticsPopup(statistics) {
+      this.horizontalStatistics = {};
+      this.verticalStatistics = {};
+      for (const [type, stats] of Object.entries(statistics)) {
+        if (["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight"].includes(type)) {
+          this.horizontalStatistics[type] = stats;
+        } else if (["internalMargin","intercolumnSpaces"].includes(type)) {
+          this.verticalStatistics[type] = stats;
+        }
+      }
+      this.showStatistics = true;
+    },
+    closeStatisticsPopup() {
+      this.showStatistics = false;
+    },
+    getCurrentPageStatistics() {
+      const horizontal = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight"];
+      const vertical = ["internalMargin","intercolumnSpaces"];
+      const stats = {};
+      horizontal.forEach((t) => {
+        const arr = this.lengthMeasurements[t]?.[this.currentPage];
+        if (arr?.length) {
+          const vals = this.extractValues(arr, t);
+          stats[t] = {
+            average: this.calculateAverage(vals),
+            standardDeviation: this.calculateStandardDeviation(vals),
+            mode: this.calculateMode(vals),
+          };
+        }
+      });
+      vertical.forEach((t) => {
+        const arr = this.lengthMeasurements[t]?.[this.currentPage];
+        if (arr?.length) {
+          const vals = this.extractValues(arr, t);
+          stats[t] = {
+            average: this.calculateAverage(vals),
+            standardDeviation: this.calculateStandardDeviation(vals),
+            mode: this.calculateMode(vals),
+          };
+        }
+      });
+      return stats;
+    },
+    getEntireDocumentStatistics() {
+      const horizontal = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight"];
+      const vertical = ["internalMargin","intercolumnSpaces"];
+      const stats = {};
+      horizontal.forEach((t) => {
+        let vals = [];
+        for (let p = 0; p < this.totalPages; p++) {
+          const arr = this.lengthMeasurements[t]?.[p];
+          if (arr?.length) vals = vals.concat(this.extractValues(arr, t));
+        }
+        stats[t] = {
+          average: this.calculateAverage(vals),
+          standardDeviation: this.calculateStandardDeviation(vals),
+          mode: this.calculateMode(vals),
+        };
+      });
+      vertical.forEach((t) => {
+        let vals = [];
+        for (let p = 0; p < this.totalPages; p++) {
+          const arr = this.lengthMeasurements[t]?.[p];
+          if (arr?.length) vals = vals.concat(this.extractValues(arr, t));
+        }
+        stats[t] = {
+          average: this.calculateAverage(vals),
+          standardDeviation: this.calculateStandardDeviation(vals),
+          mode: this.calculateMode(vals),
+        };
+      });
+      return stats;
+    },
+
+    /* ---------- Tool message ---------- */
+    showToolMessage(message) {
+      this.toolMessage = message;
+      setTimeout(() => { this.toolMessage = ""; }, 3000);
     },
   },
 };
 </script>
 
 <style scoped>
-* { font-family: "Arial","Helvetica",sans-serif !important; }
+* { font-family: "Arial", "Helvetica", sans-serif !important; }
 .viewer-container { display: flex; flex-direction: column; height: 100vh; background-color: #f1f1f1; }
+.top-bar { display: flex; justify-content: space-between; align-items: center; background: #f1f1f1; border-bottom: 1px solid #ddd; padding: 10px 20px; }
+.logo { height: 60px; }
 
-/* Toolbar / Nav shared classes used by saveAnnotations() */
-.top-bar {
-  display: flex; justify-content: space-between; align-items: center;
-  background-color: #f1f1f1; border-bottom: 1px solid #ddd; padding: 10px 20px;
-}
-.navigation-bar { display: flex; justify-content: center; align-items: center; margin: 10px 0; gap: 10px; }
+.toolbar { display: flex; justify-content: center; gap: 30px; flex: 1; position: relative; }
+.toolbar-item { display: flex; flex-direction: column; align-items: center; font-size: 12px; color: #333; cursor: pointer; padding: 3px; }
+.toolbar-item:hover { color: #007bff; }
 
-/* Stage */
-.drawing-layer { position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
-
-/* Cropping overlay */
-.cropping-rectangle {
-  position: absolute;
-  border: 2px dashed #007bff;
-  background-color: rgba(0,123,255,0.2);
-  pointer-events: none;
-  z-index: 100;
-}
-
-/* Highlight / underline */
-.highlight-rectangle {
-  position: absolute;
-  border: 2px solid rgba(255, 255, 0, 0.7);
-  background-color: rgba(255, 255, 0, 0.3);
-  pointer-events: none;
-}
-.underline-line {
-  position: absolute;
-  background-color: blue;
-  height: 2px;
-  pointer-events: none;
-  z-index: 1100;
-}
-
-/* Tool message toast */
 .tool-message {
-  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  background-color: #007bff; color: #fff; padding: 10px 20px; border-radius: 5px;
-  z-index: 1100; font-size: 14px; text-align: center; box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+  position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+  background-color: #007bff; color: white; padding: 8px 14px; border-radius: 6px; z-index: 1200; font-size: 12px;
 }
+
+.workspace { display: block; height: calc(100vh - 110px); }
+.stage {    position: relative;   background: #f1f1f1; }
+.bank { width: 300px; min-width: 300px; border-left: 1px solid #e5e7eb; }
+
+.navigation-bar { display: flex; justify-content: center; align-items: center; margin: 0; padding: 6px 0; gap: 8px; background: #f1f1f1; border-bottom: 1px solid #ddd; }
+.page-input-container { display: flex; align-items: center; gap: 4px; }
+.page-input-container input { width: 45px; text-align: center; }
+
+.pdf-viewer { margin: 0; position: relative; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; overflow: hidden; max-height: 100%; }
+.pdf-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+
+.drawing-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+
+.underline-line { position: absolute; background-color: blue; height: 2px; pointer-events: none; z-index: 1100; }
+
+.length-measurement { position: absolute; border: 2px solid rgba(0, 0, 0, 0.5); pointer-events: none; }
+.length-label {
+  position: absolute; left: 15px; top: 15px; transform: translateY(0);
+  color: black; font-size: 12px; background-color: white; padding: 2px 5px; border-radius: 3px;
+}
+.draggable-label { cursor: grab; user-select: none; }
+.draggable-label:active { cursor: grabbing; }
+
+.highlight-rectangle { position: absolute; border: 2px solid rgba(255, 255, 0, 0.7); background-color: rgba(255, 255, 0, 0.3); pointer-events: none; }
+
+.cropping-rectangle { position: absolute; border: 2px dashed #007bff; background-color: rgba(0, 123, 255, 0.2); pointer-events: none; z-index: 100; }
+
+.blurred-background { position: fixed; top: 0; left: 0; width: 100%; height: 100%; backdrop-filter: blur(8px); background-color: rgba(0,0,0,0.3); z-index: 999; }
+.cropped-popup { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #fff; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 1000; padding: 20px; text-align: center; }
+.cropped-popup-content img { max-width: 100%; max-height: 300px; margin-bottom: 20px; }
+.cropped-popup-content button { margin-top: 10px; padding: 8px 16px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+.cropped-popup-content button:hover { background-color: #0056b3; }
+
+.comment-container { position: absolute; display: flex; flex-direction: column; align-items: center; cursor: grab; z-index: 1; }
+.comment-container:active { cursor: grabbing; }
+.comment-icon { font-size: 24px; background-color: #ffecb3; border-radius: 50%; width: 30px; height: 30px; display: flex; justify-content: center; align-items: center; }
+.comment-bubble { margin-left: 8px; padding: 8px; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0px 2px 4px rgba(0,0,0,0.1); position: relative; }
+.comment-bubble::after { content: ""; position: absolute; top: 50%; left: -8px; width: 0; height: 0; border: 8px solid transparent; border-right-color: #fff; transform: translateY(-50%); }
+.comment-content { font-size: 14px; color: #333; }
+.comment-input-container { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #fff; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); padding: 10px; width: 300px; z-index: 1000; }
+.comment-input-box { width: 100%; height: 60px; border: 1px solid #ccc; border-radius: 5px; padding: 8px; font-size: 14px; margin-bottom: 8px; resize: none; }
+.btn-save-comment, .btn-cancel-comment { background-color: #007bff; color: white; border: none; border-radius: 5px; padding: 5px 10px; font-size: 14px; cursor: pointer; }
+.btn-cancel-comment { background-color: #6c757d; margin-left: 10px; }
+
+.clear-dropdown {
+  position: absolute; top: 100%; left: 0; background: white; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); z-index: 1100; min-width: 160px;
+}
+.clear-dropdown div { padding: 8px 12px; cursor: pointer; }
+.clear-dropdown div:hover { background: #f5f5f5; }
+
+.length-popup {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  display: flex; justify-content: center; align-items: center;
+  background-color: rgba(0,0,0,0.5); z-index: 1200;
+}
+.length-popup-content {
+  background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); text-align: center; width: 520px; max-width: calc(100% - 24px);
+}
+.btn-grid, .label-grid { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 14px 0; }
+.grid-btn {
+  border: 1px solid #2563eb;
+  background: #3b82f6;         /* primary blue */
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: filter .15s, transform .02s;
+}
+.grid-btn:hover { filter: brightness(0.95); }
+.grid-btn:active { transform: translateY(1px); }
+.grid-btn.active {
+  background: #2563eb;
+  border-color: #1d4ed8;
+}
+.swatch {
+  display:inline-block;
+  width:16px;
+  height:16px;
+  border-radius:4px;
+  margin-right:8px;
+  border:1px solid rgba(0,0,0,.1);
+  vertical-align: -2px;
+}
+.popup-actions { display: flex; justify-content: center; gap: 10px; }
+
+.row { margin: 12px 0; text-align: left; }
+.row label { display: inline-block; width: 80px; font-size: 13px; color: #333; }
+.new-label-row { display: flex; gap: 8px; justify-content: center; margin: 8px 0 0; }
+.new-label-row input { flex: 1; min-width: 240px; border: 1px solid #ddd; border-radius: 6px; padding: 6px 8px; }
+
+.stats-panel {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  display: flex; justify-content: center; align-items: center;
+  background-color: rgba(0,0,0,0.3); z-index: 1200;
+}
+.panel-card {
+  background: white; border-radius: 12px; padding: 18px; width: 380px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); text-align: center;
+}
+.panel-card h4 { margin: 0 0 10px; }
+
+.statistics-popup {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,0.5); z-index: 1200;
+}
+.statistics-popup-content {
+  background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+  max-width: 600px; width: 100%;
+}
+.statistics-popup-content table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+.statistics-popup-content th, .statistics-popup-content td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+.statistics-popup-content th { background: #f2f2f2; }
+.statistics-popup-content h4 { margin-top: 12px; margin-bottom: 8px; }
 </style>

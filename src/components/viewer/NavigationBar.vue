@@ -71,40 +71,43 @@ export default {
   display: flex;
   justify-content: center;
   align-items: center;
-  margin: 10px 0;
-  gap: 10px;
+  margin: 5px 0;
+  gap: 8px;
   font-family: "Arial", "Helvetica", sans-serif;
+  font-size: 13px;
 }
 
 .page-input-container {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
 }
 
 .page-input-container input {
-  width: 60px;
+  width: 50px;
   text-align: center;
-  padding: 6px 8px;
+  padding: 4px 6px;
   border: 1px solid #ccc;
-  border-radius: 6px;
+  border-radius: 4px;
   background: #fff;
   outline: none;
+  font-size: 12px;
 }
 
 .page-input-container input:focus {
   border-color: #007bff;
-  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.15);
+  box-shadow: 0 0 0 1px rgba(0, 123, 255, 0.15);
 }
 
 .nav-btn {
   background-color: #f1f1f1;
   color: #333;
   border: 1px solid #ddd;
-  padding: 6px 10px;
-  border-radius: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease, border 0.15s ease;
+  font-size: 12px;
 }
 
 .nav-btn:hover:not(:disabled) {
