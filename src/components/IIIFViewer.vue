@@ -213,7 +213,7 @@
               position: 'absolute',
               cursor: draggedLabelIndex === 'dynamic' ? 'grabbing' : 'grab',
               backgroundColor: 'white',
-              zIndex: 2000,
+              zIndex: 400,
               userSelect: 'none',
               pointerEvents: 'auto',
             }"
@@ -251,7 +251,7 @@
               position: 'absolute',
               cursor: draggedLabelIndex === measurement.id ? 'grabbing' : 'grab',
               backgroundColor: 'white',
-              zIndex: 2000,
+              zIndex: 400,
               userSelect: 'none',
               pointerEvents: 'auto',
             }"
@@ -368,7 +368,7 @@
     </div>
 
     <!-- Angle Label Picker Popup -->
-    <div v-if="showAngleLabelPopup" class="length-popup">
+    <div v-if="showAngleLabelPopup" class="length-popup" @click.self="showAngleLabelPopup = false">
       <div class="length-popup-content">
         <h3>Select or Create Angle Label</h3>
 
@@ -397,7 +397,7 @@
     </div>
 
     <!-- Angle Statistics Filter Popup -->
-    <div v-if="showAngleFilterPopup" class="length-popup">
+    <div v-if="showAngleFilterPopup" class="length-popup" @click.self="showAngleFilterPopup = false">
       <div class="length-popup-content">
         <h3>Angle Measurements</h3>
         <div class="row">
@@ -431,7 +431,7 @@
     </div>
 
     <!-- Trace Pen Popup -->
-    <div v-if="showTracePopup" class="length-popup">
+    <div v-if="showTracePopup" class="length-popup" @click.self="showTracePopup = false">
       <div class="length-popup-content">
         <h3>Choose Pen & Angle</h3>
 
@@ -473,18 +473,25 @@
     </div>
 
     <!-- Stats quick panel (Lengths + Angles entry) -->
-    <div v-if="showStatsPanel" class="stats-panel">
-      <div class="panel-card">
+    <div
+      v-if="showStatsPanel"
+      class="stats-panel"
+      @click.self="showStatsPanel = false"
+    >
+      <div class="panel-card stats-card">
         <h4>Statistics</h4>
-        <button class="grid-btn" @click="calculateCurrentPage">Lengths: Current Page</button>
-        <button class="grid-btn" @click="calculateEntireDocument">Lengths: Entire Document</button>
-        <button class="grid-btn" @click="showAngleFilterPopup = true">Angle Measurements…</button>
-        <button class="grid-btn" @click="showStatsPanel=false">Close</button>
+
+        <div class="panel-actions">
+          <button class="grid-btn" @click="calculateCurrentPage">Lengths: Current Page</button>
+          <button class="grid-btn" @click="calculateEntireDocument">Lengths: Entire Document</button>
+          <button class="grid-btn" @click="openAnglesFilterFromStats">Angle Measurements…</button>
+          <button class="grid-btn" @click="showStatsPanel=false">Close</button>
+        </div>
       </div>
     </div>
 
     <!-- Horizontal Bands Popup (as buttons) -->
-    <div v-if="showHorizontalPopup" class="length-popup">
+    <div v-if="showHorizontalPopup" class="length-popup" @click.self="showHorizontalPopup = false">
       <div class="length-popup-content">
         <h3>Select Horizontal Measurement</h3>
         <div class="btn-grid">
@@ -524,7 +531,7 @@
     </div>
 
     <!-- Vertical Bands Popup (as buttons) -->
-    <div v-if="showVerticalPopup" class="length-popup">
+    <div v-if="showVerticalPopup" class="length-popup" @click.self="showVerticalPopup = false">
       <div class="length-popup-content">
         <h3>Select Vertical Measurement</h3>
         <div class="btn-grid">
@@ -536,6 +543,10 @@
             <span class="swatch" :style="{ background: measurementColors.intercolumnSpaces }"></span>
             <span>Intercolumn Spaces</span>
           </button>
+          <button class="grid-btn" @click="beginLength('externalMargin')">
+            <span class="swatch" :style="{ background: measurementColors.externalMargin }"></span>
+            <span>External Margin</span>
+          </button>
         </div>
         <div class="popup-actions">
           <button class="grid-btn" @click="hideLengthPopup">Cancel</button>
@@ -544,7 +555,7 @@
     </div>
 
     <!-- Angle Statistics Result Popup -->
-    <div v-if="showAngleStatistics" class="statistics-popup">
+    <div v-if="showAngleStatistics" class="statistics-popup" @click.self="showAngleStatistics = false">
       <div class="statistics-popup-content">
         <h3>Angle Statistics</h3>
         <table>
@@ -570,7 +581,7 @@
     </div>
 
     <!-- Lengths Statistics Result Popup -->
-    <div v-if="showStatistics" class="statistics-popup">
+    <div v-if="showStatistics" class="statistics-popup" @click.self="showStatistics = false">
       <div class="statistics-popup-content">
         <h3>Statistics</h3>
 
@@ -621,7 +632,7 @@
     </div>
 
     <!-- Cropped Image Popup -->
-    <div v-if="croppedImage" class="blurred-background" style="top: 90px"></div>
+    <div v-if="croppedImage" class="blurred-background" style="top: 90px" @click="croppedImage = null"></div>
     <div v-if="croppedImage" class="cropped-popup">
       <div class="cropped-popup-content">
         <h3>Cropped Image</h3>
@@ -872,6 +883,7 @@ export default {
         intercolumnSpaces: "rgba(255, 0, 255, 0.5)",
         lineHeight: "rgba(100, 100, 255, 0.5)",
         minimumHeight: "rgba(255, 100, 100, 0.5)",
+        externalMargin: "rgba(0, 128, 128, 0.5)",
       },
       lengthMeasurements: {
         ascenders: {},
@@ -883,6 +895,7 @@ export default {
         intercolumnSpaces: {},
         lineHeight: {},
         minimumHeight: {},
+        externalMargin: {},
       },
       labelPositions: {}, // for length labels drag
       draggedLabelIndex: null,
@@ -1298,10 +1311,12 @@ export default {
     },
 
     openHorizontalPopup() {
+      this.showStatsPanel = false;
       this.showHorizontalPopup = true;
       this.showVerticalPopup = false;
     },
     openVerticalPopup() {
+      this.showStatsPanel = false;
       this.showVerticalPopup = true;
       this.showHorizontalPopup = false;
     },
@@ -1361,6 +1376,11 @@ cancelPenSelection() {
     calculateEntireDocument() {
       this.showStatsPanel = false;
       this.showStatisticsPopup(this.getEntireDocumentStatistics());
+    },
+
+    openAnglesFilterFromStats() {
+      this.showStatsPanel = false;          // ensure the stats panel closes
+      this.showAngleFilterPopup = true;     // then open the angles filter
     },
 
     runAngleStatistics() {
@@ -2157,6 +2177,45 @@ cancelPenSelection() {
 .page-input-container { display: flex; align-items: center; gap: 4px; }
 .page-input-container input { width: 45px; text-align: center; }
 
+/* === Base stacking for stage and annotations === */
+.stage,
+.pdf-viewer {
+  position: relative;
+  z-index: 0;
+}
+
+.drawing-layer,            /* SVG traces/angles */
+.highlight-rectangle,
+.underline-line,
+.length-measurement,       /* the colored band rectangles */
+.comment-container,
+.cropping-rectangle {
+  z-index: 200;            /* safely below overlays/panels */
+}
+
+/* Bank panel still floats above the stage but below popups */
+.bank-panel {
+  z-index: 1500;
+}
+
+/* === Popups / overlays must always be on top === */
+.length-popup,             /* Horizontal/Vertical selectors */
+.statistics-popup,         /* results tables */
+.stats-panel,              /* the 'Statistics' quick panel */
+.cropped-popup,            /* cropped image dialog */
+.blurred-background {
+  z-index: 5000;           /* top-most */
+}
+
+/* Just to be safe, their internal cards sit above their own backdrop */
+.length-popup-content,
+.statistics-popup-content,
+.panel-card.stats-card,
+.cropped-popup-content {
+  position: relative;
+  z-index: 1;
+}
+
 .pdf-viewer { margin: 0; position: relative; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; overflow: hidden; max-height: 100%; }
 .pdf-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
 
@@ -2240,15 +2299,59 @@ cancelPenSelection() {
 .new-label-row { display: flex; gap: 8px; justify-content: center; margin: 8px 0 0; }
 .new-label-row input { flex: 1; min-width: 240px; border: 1px solid #ddd; border-radius: 6px; padding: 6px 8px; }
 
+/* Overlay for stats panel */
 .stats-panel {
-  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  display: flex; justify-content: center; align-items: center;
-  background-color: rgba(0,0,0,0.3); z-index: 1200;
+  position: fixed;
+  inset: 0;                           /* top/left/right/bottom: 0 */
+  background: rgba(0, 0, 0, 0.30);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.panel-card {
-  background: white; border-radius: 12px; padding: 18px; width: 380px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); text-align: center;
+
+/* Card look & feel */
+.panel-card.stats-card {
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 12px 28px rgba(0,0,0,0.18);
+  width: min(680px, calc(100% - 32px));
+  padding: 22px 24px 24px;
+  text-align: center;
 }
-.panel-card h4 { margin: 0 0 10px; }
+
+/* Title */
+.panel-card.stats-card h4 {
+  margin: 0 0 14px;
+  font-size: 26px;
+  font-weight: 700;
+}
+
+/* Button layout inside the stats card */
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+/* Reuse the blue 'grid-btn' look but add a little breathing room */
+.panel-actions .grid-btn {
+  min-width: 230px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid #2f60e3;
+  background: #3f6eea;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 0 rgba(0,0,0,0.06) inset;
+}
+.panel-actions .grid-btn:hover {
+  filter: brightness(0.97);
+}
+.panel-actions .grid-btn:active {
+  transform: translateY(1px);
+}
 
 .statistics-popup {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
