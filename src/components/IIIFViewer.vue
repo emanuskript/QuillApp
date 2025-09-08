@@ -3,9 +3,20 @@
   <div class="viewer-container">
     <!-- Top Bar -->
     <div class="top-bar">
-      <img src="@/assets/logo.png" alt="Logo" class="logo" />
+      <img
+        src="@/assets/logo.png"
+        alt="Logo"
+        class="logo"
+        @click="goHome"
+      />
 
       <div class="toolbar">
+        <!-- Comment -->
+        <div class="toolbar-item" @click="selectTool('comment')">
+          <i class="fa-regular fa-comment"></i>
+          <span>Comment</span>
+        </div>
+
         <!-- Highlight -->
         <div class="toolbar-item" @click="selectTool('highlight')">
           <i class="fa-solid fa-highlighter"></i>
@@ -18,17 +29,20 @@
           <span>Underline</span>
         </div>
 
-        <!-- Comment -->
-        <div class="toolbar-item" @click="selectTool('comment')">
-          <i class="fa-regular fa-comment"></i>
-          <span>Comment</span>
-        </div>
-
         <!-- Trace -->
         <div class="toolbar-item" @click="selectTool('trace')">
           <i class="fa-solid fa-pencil"></i>
           <span>Trace</span>
         </div>
+
+        <!-- Crop -->
+        <div class="toolbar-item" @click="startCrop">
+          <i class="fa-solid fa-scissors"></i>
+          <span>Crop</span>
+        </div>
+
+        <!-- divider -->
+        <div class="toolbar-divider" aria-hidden="true"></div>
 
         <!-- Measure Angle -->
         <div class="toolbar-item" @click="selectTool('measure')">
@@ -51,18 +65,15 @@
           <span>Bands</span>
         </div>
 
-        <!-- Crop -->
-        <div class="toolbar-item" @click="startCrop">
-          <i class="fa-solid fa-scissors"></i>
-          <span>Crop</span>
-        </div>
-
         <!-- Generate Statistics -->
         <div class="toolbar-item" @click="showStatsPanel = !showStatsPanel">
           <i class="fa-solid fa-calculator"></i>
           <span>Generate</span>
           <span>Statistics</span>
         </div>
+
+        <!-- divider -->
+        <div class="toolbar-divider" aria-hidden="true"></div>
 
         <!-- Save -->
         <div class="toolbar-item" @click="saveAnnotations">
@@ -87,7 +98,6 @@
         </div>
       </div>
     </div>
-
     <!-- Page Navigation (now right under the toolbar, at the top) -->
     <NavigationBar
       :currentPage="currentPage"
@@ -521,7 +531,7 @@
           </button>
           <button class="grid-btn" @click="beginLength('minimumHeight')">
             <span class="swatch" :style="{ background: measurementColors.minimumHeight }"></span>
-            <span>Minimum Height</span>
+            <span>Minim Height</span>
           </button>
         </div>
         <div class="popup-actions">
@@ -1141,6 +1151,15 @@ export default {
     };
   },
   methods: {
+    goHome() {
+      const ok = window.confirm(
+        "Return to the home screen? Any unsaved work on this page will be lost."
+      );
+      if (ok) {
+        this.$router.push({ name: "IIIFInput" });
+      }
+    },
+
     async fetchIIIFImages(manifestUrl) {
       try {
         const response = await fetch(manifestUrl);
@@ -1206,6 +1225,8 @@ export default {
     /* ----- Bank helpers ----- */
     camelToTitle(key) {
       if (!key) return "";
+      // Special case for minimumHeight
+      if (key === "minimumHeight") return "Minim Height";
       return key
         .replace(/([a-z])([A-Z])/g, "$1 $2")
         .replace(/^./, (s) => s.toUpperCase());
@@ -1496,7 +1517,7 @@ cancelPenSelection() {
       this.showClearDropdown = false;
     },
     clearVerticalLengths() {
-      ["internalMargin","intercolumnSpaces"].forEach((t)=>{
+      ["internalMargin","intercolumnSpaces","externalMargin"].forEach((t)=>{
         if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage];
       });
       this.showToolMessage("Vertical lengths cleared.");
@@ -1505,7 +1526,7 @@ cancelPenSelection() {
     clearAll() {
       this.annotationsByPage[this.currentPage] = [];
       this.comments[this.currentPage] = [];
-      const all = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","internalMargin","intercolumnSpaces","lineHeight","minimumHeight"];
+      const all = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","internalMargin","intercolumnSpaces","externalMargin","lineHeight","minimumHeight"];
       all.forEach(t => { if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage]; });
       this.strokes = [];
       this.measurePoints = [];
@@ -2041,7 +2062,7 @@ cancelPenSelection() {
 
     /* ---------- Stats helpers ---------- */
     extractValues(measurements, type) {
-      const vertical = ["internalMargin", "intercolumnSpaces"];
+      const vertical = ["internalMargin", "intercolumnSpaces", "externalMargin"];
       const isVertical = vertical.includes(type);
       // In our rectangles: for horizontal labels we report height; for vertical we report width
       return measurements.map((m) => (isVertical ? m.width : m.height));
@@ -2088,7 +2109,7 @@ cancelPenSelection() {
     },
     getCurrentPageStatistics() {
       const horizontal = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight"];
-      const vertical = ["internalMargin","intercolumnSpaces"];
+      const vertical = ["internalMargin","intercolumnSpaces","externalMargin"];
       const stats = {};
       horizontal.forEach((t) => {
         const arr = this.lengthMeasurements[t]?.[this.currentPage];
@@ -2116,7 +2137,7 @@ cancelPenSelection() {
     },
     getEntireDocumentStatistics() {
       const horizontal = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight"];
-      const vertical = ["internalMargin","intercolumnSpaces"];
+      const vertical = ["internalMargin","intercolumnSpaces","externalMargin"];
       const stats = {};
       horizontal.forEach((t) => {
         let vals = [];
@@ -2156,13 +2177,53 @@ cancelPenSelection() {
 
 <style scoped>
 * { font-family: "Arial", "Helvetica", sans-serif !important; }
-.viewer-container { display: flex; flex-direction: column; height: 100vh; background-color: #f1f1f1; }
-.top-bar { display: flex; justify-content: space-between; align-items: center; background: #f1f1f1; border-bottom: 1px solid #ddd; padding: 10px 20px; }
-.logo { height: 60px; }
+.viewer-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background: #f1f1f1; /* gray canvas behind the manuscript */
+}
+/* Full-bleed blue bars with clean layout */
+.top-bar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 16px;
+  background: #e7f0ff;
+  border-bottom: 1px solid #c9d8ff;
+  padding: 12px 24px;
+}
+.logo { height: 60px; cursor: pointer; }
 
-.toolbar { display: flex; justify-content: center; gap: 30px; flex: 1; position: relative; }
-.toolbar-item { display: flex; flex-direction: column; align-items: center; font-size: 12px; color: #333; cursor: pointer; padding: 3px; }
-.toolbar-item:hover { color: #007bff; }
+.toolbar {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(68px, auto);
+  justify-content: center;
+  align-items: center;
+  gap: 28px;
+}
+.toolbar-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: #222;
+  cursor: pointer;
+  padding: 6px 4px;
+  user-select: none;
+}
+.toolbar-item:hover { color: #2b6fde; }
+.toolbar-item i { font-size: 22px; line-height: 1; }
+.toolbar-item span { font-size: 12px; }
+
+.toolbar-divider {
+  width: 1px;
+  height: 32px;
+  background: #c9d8ff;
+  margin: 0 8px;
+}
 
 .tool-message {
   position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
@@ -2173,9 +2234,37 @@ cancelPenSelection() {
 .stage {    position: relative;   background: #f1f1f1; }
 .bank { width: 300px; min-width: 300px; border-left: 1px solid #e5e7eb; }
 
-.navigation-bar { display: flex; justify-content: center; align-items: center; margin: 0; padding: 6px 0; gap: 8px; background: #f1f1f1; border-bottom: 1px solid #ddd; }
+.navigation-bar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 0;
+  padding: 0 24px 10px 24px;
+  gap: 10px;
+  background: #e7f0ff;
+  border-bottom: 1px solid #c9d8ff;
+}
 .page-input-container { display: flex; align-items: center; gap: 4px; }
 .page-input-container input { width: 45px; text-align: center; }
+
+.navigation-bar .btn {
+  background: #2b6fde;
+  color: #fff;
+  border: 1px solid #235acc;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.navigation-bar .btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.navigation-bar input {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid #c9d8ff;
+  border-radius: 6px;
+}
 
 /* === Base stacking for stage and annotations === */
 .stage,
@@ -2216,7 +2305,16 @@ cancelPenSelection() {
   z-index: 1;
 }
 
-.pdf-viewer { margin: 0; position: relative; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; overflow: hidden; max-height: 100%; }
+.pdf-viewer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  background: #f1f1f1; /* gray behind manuscript */
+}
 .pdf-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
 
 .drawing-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }

@@ -68,6 +68,9 @@ export default {
 
 <style scoped>
 .navigation-bar {
+  background: #e7f0ff;           /* match top bar */
+  border-bottom: 1px solid #c9d8ff;
+  padding: 6px 0;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -77,6 +80,10 @@ export default {
   font-size: 13px;
 }
 
+.navigation-bar > * {
+  margin-top: 8px;
+}
+
 .page-input-container {
   display: flex;
   align-items: center;
@@ -84,7 +91,7 @@ export default {
 }
 
 .page-input-container input {
-  width: 50px;
+  width: 45px;
   text-align: center;
   padding: 4px 6px;
   border: 1px solid #ccc;
@@ -100,24 +107,18 @@ export default {
 }
 
 .nav-btn {
-  background-color: #f1f1f1;
-  color: #333;
-  border: 1px solid #ddd;
-  padding: 4px 8px;
-  border-radius: 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease, border 0.15s ease;
   font-size: 12px;
+  border: none;
+  background: #3b82f6;  /* blue */
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.06);
 }
-
-.nav-btn:hover:not(:disabled) {
-  background-color: #e9f3ff;
-  color: #007bff;
-  border-color: #b6daff;
-}
-
+.nav-btn:hover { background: #2f6fe0; }
 .nav-btn:disabled {
-  opacity: 0.6;
+  background: #9fbdfd;
   cursor: not-allowed;
 }
 </style>
