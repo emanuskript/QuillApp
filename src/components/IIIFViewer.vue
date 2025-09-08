@@ -641,6 +641,18 @@
       </div>
     </div>
 
+    <!-- Clear Confirmation Popup -->
+    <div v-if="showClearConfirmation" class="length-popup" @click.self="showClearConfirmation = false">
+      <div class="length-popup-content">
+        <h3>Clear All Annotations</h3>
+        <p>Are you sure you want to clear all annotations on this page?</p>
+        <div class="popup-actions">
+          <button class="grid-btn confirm-btn" @click="confirmClearAll">Yes</button>
+          <button class="grid-btn cancel-btn" @click="cancelClearAll">No</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Cropped Image Popup -->
     <div v-if="croppedImage" class="blurred-background" style="top: 90px" @click="croppedImage = null"></div>
     <div v-if="croppedImage" class="cropped-popup">
@@ -844,6 +856,10 @@ export default {
       croppingStarted: false,
       cropButtonClicked: false,
 
+      // Bands sticky-mode
+      activeBandGroup: null,   // 'horizontal' | 'vertical' | null
+      pendingBandGroup: null,  // which popup opened last ('horizontal'|'vertical')
+
       // Stage state
       images: [],
       currentPage: 0,
@@ -943,6 +959,7 @@ export default {
 
       // UI
       showClearDropdown: false,
+      showClearConfirmation: false,
       toolMessage: "",
 
       // Bank
@@ -1303,16 +1320,32 @@ export default {
       }
 
       if (tool === "highlight") {
+        // toggle
+        if (this.highlightModeActive) {
+          this.highlightModeActive = false;
+          this.startPoint = null;
+          this.currentSquare = null;
+          this.showToolMessage("Highlight mode deactivated.");
+          return;
+        }
         resetAll();
         this.highlightModeActive = true;
-        this.showToolMessage("Highlight: click-start then click-end.");
+        this.showToolMessage("Highlight mode ACTIVE. Click and drag to add highlights. Click Highlight again to exit.");
         return;
       }
 
       if (tool === "underline") {
+        // toggle
+        if (this.underlineModeActive) {
+          this.underlineModeActive = false;
+          this.startPoint = null;
+          this.currentUnderline = null;
+          this.showToolMessage("Underline mode deactivated.");
+          return;
+        }
         resetAll();
         this.underlineModeActive = true;
-        this.showToolMessage("Underline: click-start then click-end.");
+        this.showToolMessage("Underline mode ACTIVE. Click and drag to add underlines. Click Underline again to exit.");
         return;
       }
 
@@ -1332,11 +1365,31 @@ export default {
     },
 
     openHorizontalPopup() {
+      // toggle off if horizontal band mode already active
+      if (this.lengthMeasurementActive && this.activeBandGroup === 'horizontal') {
+        this.lengthMeasurementActive = false;
+        this.isMeasuring = false;
+        this.activeBandGroup = null;
+        this.showToolMessage('Horizontal bands deactivated.');
+        return;
+      }
+      // otherwise open chooser for (re)selecting the type
+      this.pendingBandGroup = 'horizontal';
       this.showStatsPanel = false;
       this.showHorizontalPopup = true;
       this.showVerticalPopup = false;
     },
     openVerticalPopup() {
+      // toggle off if vertical band mode already active
+      if (this.lengthMeasurementActive && this.activeBandGroup === 'vertical') {
+        this.lengthMeasurementActive = false;
+        this.isMeasuring = false;
+        this.activeBandGroup = null;
+        this.showToolMessage('Vertical bands deactivated.');
+        return;
+      }
+      // otherwise open chooser for (re)selecting the type
+      this.pendingBandGroup = 'vertical';
       this.showStatsPanel = false;
       this.showVerticalPopup = true;
       this.showHorizontalPopup = false;
@@ -1346,9 +1399,14 @@ export default {
       this.showVerticalPopup = false;
     },
     beginLength(type) {
+      // choose a band type and stay in that mode until the same toolbar button is clicked again
       this.selectedMeasurement = type;
       this.hideLengthPopup();
       this.startLengthMeasurement();
+      // remember which group is active (horizontal | vertical)
+      this.activeBandGroup = this.pendingBandGroup || this.activeBandGroup || 'horizontal';
+      const groupLabel = this.activeBandGroup === 'vertical' ? 'Vertical' : 'Horizontal';
+      this.showToolMessage(`${groupLabel} "${type}" measuring is ACTIVE. Click the ${groupLabel} Bands button again to exit.`);
     },
 
     /* ---------- Angle label popup ---------- */
@@ -1524,6 +1582,11 @@ cancelPenSelection() {
       this.showClearDropdown = false;
     },
     clearAll() {
+      this.showClearDropdown = false;
+      this.showClearConfirmation = true;
+    },
+    
+    confirmClearAll() {
       this.annotationsByPage[this.currentPage] = [];
       this.comments[this.currentPage] = [];
       const all = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","internalMargin","intercolumnSpaces","externalMargin","lineHeight","minimumHeight"];
@@ -1532,7 +1595,11 @@ cancelPenSelection() {
       this.measurePoints = [];
       this.calculatedAngle = 0;
       this.showToolMessage("All annotations cleared.");
-      this.showClearDropdown = false;
+      this.showClearConfirmation = false;
+    },
+    
+    cancelClearAll() {
+      this.showClearConfirmation = false;
     },
 
     /* ---------- Label drag for length badges ---------- */
@@ -1611,8 +1678,6 @@ cancelPenSelection() {
           });
           this.startPoint = null;
           this.currentSquare = null;
-          this.lengthMeasurementActive = false;
-          this.isMeasuring = false;
           return;
         }
       }
@@ -1642,8 +1707,6 @@ cancelPenSelection() {
             this.currentUnderline = null;
           }
           this.startPoint = null;
-          this.highlightModeActive = false;
-          this.underlineModeActive = false;
           return;
         }
       }
@@ -2014,8 +2077,19 @@ cancelPenSelection() {
       try {
         const topBar = document.querySelector(".top-bar");
         const navigationBar = document.querySelector(".navigation-bar");
-        if (topBar) topBar.style.display = "none";
-        if (navigationBar) navigationBar.style.display = "none";
+        // cache previous inline visibility (not computed style) so we can restore exactly
+        const prevTopVis = topBar ? topBar.style.visibility : "";
+        const prevNavVis = navigationBar ? navigationBar.style.visibility : "";
+        // cache scroll positions (window + stage)
+        const winScroll = { x: window.scrollX, y: window.scrollY };
+        const viewerEl = this.$refs.viewer;
+        const viewerScroll = viewerEl
+          ? { left: viewerEl.scrollLeft, top: viewerEl.scrollTop }
+          : null;
+
+        // hide without collapsing layout (prevents reflow/width jumps)
+        if (topBar) topBar.style.visibility = "hidden";
+        if (navigationBar) navigationBar.style.visibility = "hidden";
 
         const pdfDoc = await PDFDocument.create();
 
@@ -2053,8 +2127,14 @@ cancelPenSelection() {
         link.click();
         URL.revokeObjectURL(link.href);
 
-        if (topBar) topBar.style.display = "flex";
-        if (navigationBar) navigationBar.style.display = "flex";
+        // restore visibility and scroll positions exactly as before
+        if (topBar) topBar.style.visibility = prevTopVis;
+        if (navigationBar) navigationBar.style.visibility = prevNavVis;
+        if (viewerEl && viewerScroll) {
+          viewerEl.scrollLeft = viewerScroll.left;
+          viewerEl.scrollTop = viewerScroll.top;
+        }
+        window.scrollTo(winScroll.x, winScroll.y);
       } catch (e) {
         console.error("Error saving annotations:", e);
       }
@@ -2213,6 +2293,7 @@ cancelPenSelection() {
   cursor: pointer;
   padding: 6px 4px;
   user-select: none;
+  position: relative;
 }
 .toolbar-item:hover { color: #2b6fde; }
 .toolbar-item i { font-size: 22px; line-height: 1; }
@@ -2380,6 +2461,24 @@ cancelPenSelection() {
 .grid-btn.active {
   background: #2563eb;
   border-color: #1d4ed8;
+}
+.grid-btn.confirm-btn {
+  background: #3b82f6;
+  border-color: #2563eb;
+  color: white;
+}
+.grid-btn.confirm-btn:hover {
+  background: #2563eb;
+  border-color: #1d4ed8;
+}
+.grid-btn.cancel-btn {
+  background: #6b7280;
+  border-color: #4b5563;
+  color: white;
+}
+.grid-btn.cancel-btn:hover {
+  background: #4b5563;
+  border-color: #374151;
 }
 .swatch {
   display:inline-block;
