@@ -3,6 +3,7 @@
   <aside class="bank">
     <header class="bank__header">
       <span class="bank__title">Annotations — Page {{ page + 1 }}</span>
+      <div class="zoom-indicator">{{ Math.round(zoomLevel * 100) }}%</div>
     </header>
 
     <!-- Items -->
@@ -67,6 +68,7 @@ export default {
     selectedKeys: { type: Array, default: () => [] },
     multiSelect: { type: Boolean, default: true },
     moveActive: { type: Boolean, default: false },
+    zoomLevel: { type: Number, default: 1 },
   },
   emits: ["update:selected", "toggle-multi", "request-move", "cancel-move", "request-delete"],
   methods: {
@@ -78,11 +80,13 @@ export default {
         if (this.multiSelect) {
           set.add(key);
         } else {
+          // Single select mode: clear all others and add this one
           set.clear();
           set.add(key);
         }
       }
-      this.$emit("update:selected", Array.from(set));
+      const newSelection = Array.from(set);
+      this.$emit("update:selected", newSelection);
     },
     pretty(cat) {
       return String(cat)
@@ -96,7 +100,7 @@ export default {
 <style scoped>
 /* Light blue theme + old compact layout feel */
 :root{
-  --panel-bg: rgba(241, 248, 255, 0.96); /* soft light blue */
+  --panel-bg: #f1f1f1; /* same as main app background - solid, not transparent */
   --panel-border: #cfe2ff;
   --panel-text: #0c2a53;
 
@@ -116,7 +120,7 @@ export default {
   max-height: 52vh;
   display: flex;
   flex-direction: column;
-  background: var(--panel-bg);
+  background: #f1f1f1; /* direct solid gray background */
   color: var(--panel-text);
   border: 1px solid var(--panel-border);
   border-radius: 12px;
@@ -130,9 +134,21 @@ export default {
 .bank__header{
   padding: 8px 10px;
   border-bottom: 1px solid var(--panel-border);
-  background: rgba(255,255,255,.9);
+  background: #f1f1f1; /* solid background, same as main */
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 .bank__title{ font-weight: 600; }
+
+.zoom-indicator {
+  background: #3b82f6;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
 
 /* list */
 .bank__list{ overflow: auto; padding: 6px; }
@@ -167,7 +183,7 @@ export default {
 /* footer (blue buttons like requested) */
 .bank__footer{
   display:flex; gap:8px; padding:8px; border-top:1px solid var(--panel-border);
-  background: rgba(255,255,255,.92);
+  background: #f1f1f1; /* solid background, same as main */
 }
 .bank__btn{
   flex:1; appearance:none; border:1px solid #b6d1ff; background:#e7f1ff;

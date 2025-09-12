@@ -103,9 +103,16 @@
       :currentPage="currentPage"
       :totalPages="totalPages"
       :pageInput="pageInput"
+      :imageReady="imageReady"
+      :zoomLevel="zoomLevel"
+      :minZoom="minZoom"
       @prev="prevPage"
       @next="nextPage"
       @go-to="goToPage"
+      @zoom-in="zoomIn"
+      @zoom-out="zoomOut"
+      @start-hold-reset="startHoldReset"
+      @cancel-hold-reset="cancelHoldReset"
     />
 
     <!-- Tool tip message -->
@@ -117,26 +124,65 @@
       <div
         class="pdf-viewer stage"
         ref="viewer"
-        :style="{ cursor: (traceModeActive || highlightModeActive || underlineModeActive || measureModeActive || isMeasuring || moveModeActive) ? 'crosshair' : 'default' }"
+        :style="{ cursor: stageCursor }"
         @mousedown="startTrace($event)"
         @mousemove="trace($event)"
         @mouseup="endTrace($event)"
+        @selectstart.prevent.stop
+        @dragstart.prevent.stop
+        @contextmenu.prevent.stop
+        ondragstart="return false"
+        onselectstart="return false"
+        oncontextmenu="return false"
+        unselectable="on"
       >
+        <!-- NEW: zoom anchor -->
+        <div v-show="imageReady" class="zoom-anchor" :style="anchorStyle">
+          <!-- ⬇️ keep your existing <img>, <svg>, rectangles, comments, etc. here ⬇️ -->
+        
+        <!-- NUCLEAR OPTION: Replace img with div background -->
+        <div
+          v-if="croppedImage || currentImage"
+          class="image-viewer-background"
+          :style="{
+            backgroundImage: `url(${croppedImage || currentImage})`,
+            backgroundSize: 'contain',
+            backgroundRepeat: 'no-repeat',
+            backgroundPosition: 'center',
+            width: '100%',
+            height: '100%'
+          }"
+          draggable="false"
+          unselectable="on"
+          @selectstart.prevent.stop
+          @dragstart.prevent.stop
+          @mousedown.prevent.stop="handleMainImageMouseDown"
+          @contextmenu.prevent.stop
+          ondragstart="return false"
+          onselectstart="return false"
+          oncontextmenu="return false"
+          onmousedown="return false"
+          onmouseup="return false"
+          onmousemove="return false"
+          onclick="return false"
+        ></div>
+        
+        <!-- Invisible image for size calculations positioned correctly -->
         <img
           v-if="croppedImage || currentImage"
           :src="croppedImage || currentImage"
           ref="image"
-          class="image-viewer"
+          class="calculation-image"
           @load="handleImageLoad"
-          draggable="false"
+          style="width: 100% !important; height: 100% !important; object-fit: contain !important; opacity: 0 !important; pointer-events: none !important; user-select: none !important; position: absolute !important; top: 0 !important; left: 0 !important; z-index: -1 !important;"
         />
 
         <!-- SVG drawing layer -->
         <svg
           v-if="showTraces"
           class="drawing-layer"
-          :width="viewerWidth"
-          :height="viewerHeight"
+          :width="baseFitWidth"
+          :height="baseFitHeight"
         >
           <!-- existing traces -->
           <polyline
@@ -319,35 +365,6 @@
           }"
         ></div>
 
-        <!-- Comments -->
-        <div
-          v-for="(comment, index) in currentPageComments"
-          :key="'comment-' + index"
-          class="comment-container"
-          :style="{ top: comment.y + 'px', left: comment.x + 'px', position: 'absolute' }"
-          @mousedown="startDraggingComment(index, $event)"
-          @mouseup="stopDraggingComment"
-          @mousemove="dragComment"
-        >
-          <div class="comment-icon">💬</div>
-          <div class="comment-bubble">
-            <div class="comment-content">{{ comment.text }}</div>
-          </div>
-        </div>
-
-        <!-- Comment Input -->
-        <div v-if="showCommentInput" class="comment-input-container">
-          <textarea
-            class="comment-input-box"
-            v-model="currentCommentText"
-            placeholder="Add your comment..."
-          ></textarea>
-          <div class="comment-input-actions">
-            <button class="btn-save-comment" @click="addComment">Add</button>
-            <button class="btn-cancel-comment" @click="cancelComment">Cancel</button>
-          </div>
-        </div>
-
         <!-- Cropping rectangle -->
         <div
           v-if="croppingStarted && currentSquare"
@@ -360,6 +377,46 @@
             position: 'absolute',
           }"
         ></div>
+        </div>
+
+        <!-- Comments (attached to page edge; positioned in viewer space, not scaled) -->
+        <div
+          v-for="(c, i) in currentPageComments"
+          :key="'comment-'+i"
+          class="comment-card"
+          :style="commentStyle(c)"
+          @mousedown.stop="startDraggingComment(i, $event)"
+          @mouseup.stop="stopDraggingComment"
+          @mousemove.stop="dragComment"
+          @click.stop
+        >
+          <div class="comment-pin">💬</div>
+          <div class="comment-bubble">
+            <div class="comment-text">{{ c.text }}</div>
+          </div>
+        </div>
+
+        <!-- Inline composer near target Y on chosen side -->
+        <div
+          v-if="showCommentInput"
+          class="comment-composer"
+          :style="composerStyle"
+          @mousedown.stop
+          @click.stop
+        >
+          <textarea
+            class="composer-textarea"
+            v-model="currentCommentText"
+            placeholder="Add your comment…"
+            @keydown.enter.exact.prevent="addComment"
+          ></textarea>
+
+          <div class="composer-actions">
+            <button class="btn-blue" @click.stop="addComment">Add</button>
+            <button class="btn-gray" @click.stop="cancelComment">Cancel</button>
+          </div>
+        </div>
+
       </div>
 
 <!-- Compact Bank Panel (anchored, not affecting layout) -->
@@ -369,6 +426,7 @@
      :selectedKeys="bankSelectedKeys"
      :multiSelect="bankMultiSelect"
      :moveActive="moveModeActive"
+     :zoomLevel="zoomLevel"
      @update:selected="(keys) => bankSelectedKeys = keys"
      @toggle-multi="bankMultiSelect = !bankMultiSelect"
      @request-move="enableMoveMode"
@@ -567,26 +625,28 @@
     <!-- Angle Statistics Result Popup -->
     <div v-if="showAngleStatistics" class="statistics-popup" @click.self="showAngleStatistics = false">
       <div class="statistics-popup-content">
-        <h3>Angle Statistics</h3>
+        <h3>Angle Statistics ({{ angleStatistics.count }} angles)</h3>
         <table>
           <thead>
             <tr>
-              <th>Average</th>
-              <th>Standard Deviation</th>
-              <th>Mode</th>
+              <th>Mean</th>
+              <th>Median</th>
+              <th>Std Dev</th>
+              <th>Min</th>
+              <th>Max</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>{{ angleStatistics.average.toFixed(2) }}</td>
-              <td>{{ angleStatistics.standardDeviation.toFixed(2) }}</td>
-              <td>
-                {{ typeof angleStatistics.mode === "number" ? angleStatistics.mode.toFixed(2) : angleStatistics.mode }}
-              </td>
+              <td>{{ angleStatistics.mean }}°</td>
+              <td>{{ angleStatistics.median }}°</td>
+              <td>{{ angleStatistics.stdDev }}°</td>
+              <td>{{ angleStatistics.min }}°</td>
+              <td>{{ angleStatistics.max }}°</td>
             </tr>
           </tbody>
         </table>
-        <button class="grid-btn" @click="closeAngleStatisticsPopup">Close</button>
+        <button class="grid-btn" @click="showAngleStatistics = false">Close</button>
       </div>
     </div>
 
@@ -653,163 +713,215 @@
       </div>
     </div>
 
-    <!-- Cropped Image Popup -->
-    <div v-if="croppedImage" class="blurred-background" style="top: 90px" @click="croppedImage = null"></div>
-    <div v-if="croppedImage" class="cropped-popup">
+    <!-- ========= CROPPED IMAGE MODAL (drop-in replacement) ========= -->
+    <div v-if="croppedImage" class="blurred-background" @click="closeCroppedPopup"></div>
+
+    <div v-if="croppedImage" class="cropped-popup" @click.stop>
       <div class="cropped-popup-content">
-        <h3>Cropped Image</h3>
-        <hr class="popup-divider" />
+
+        <!-- Header row with centered zoom controls -->
+        <div class="crop-header">
+          <div class="left-spacer"></div>
+
+          <div class="zoom-cluster">
+            <button class="zoom-pill" :disabled="cropZoom<=1" @click.stop="cropZoomOut">−</button>
+            <button class="zoom-pill" @click.stop="cropZoomIn">+</button>
+            <span class="zoom-readout">{{ Math.round(cropZoom*100) }}%</span>
+          </div>
+
+          <div class="crop-actions">
+            <button class="grid-btn" @click.stop="saveCroppedImageAsPNG">Save PNG</button>
+            <button class="grid-btn" @click.stop="saveCroppedImageAsSVG" :disabled="!croppedSvg">Save SVG</button>
+            <button class="grid-btn" @click.stop="saveCroppedImage">Save w/ Annotations</button>
+            <button class="grid-btn cancel-btn" @click.stop="closeCroppedPopup">Close</button>
+          </div>
+        </div>
+
+        <!-- Mini Toolbar for cropped popup -->
+        <div class="crop-toolbar">
+          <div class="crop-tool" 
+               :class="{ active: highlightModeActive }"
+               @click="selectTool('highlight')"
+               title="Highlight">
+            <i class="fas fa-highlighter"></i>
+            <span>Highlight</span>
+          </div>
+          
+          <div class="crop-tool" 
+               :class="{ active: underlineModeActive }"
+               @click="selectTool('underline')"
+               title="Underline">
+            <i class="fas fa-minus"></i>
+            <span>Underline</span>
+          </div>
+          
+          <div class="crop-tool" 
+               :class="{ active: traceModeActive }"
+               @click="selectTool('trace')"
+               title="Draw">
+            <i class="fas fa-pencil-alt"></i>
+            <span>Draw</span>
+          </div>
+          
+          <div class="crop-tool" 
+               :class="{ active: measureModeActive }"
+               @click="selectTool('measure')"
+               title="Measure Angle">
+            <i class="fas fa-drafting-compass"></i>
+            <span>Angle</span>
+          </div>
+          
+          <div class="crop-tool" 
+               @click="calculateCroppedAngleStatistics"
+               title="Angle Statistics">
+            <i class="fas fa-calculator"></i>
+            <span>Stats</span>
+          </div>
+          
+          <div class="crop-tool-divider"></div>
+          
+          <div class="crop-tool" 
+               @click="selectTool('')"
+               title="Pan/Zoom">
+            <i class="fas fa-hand-paper"></i>
+            <span>Pan</span>
+          </div>
+        </div>
+
+        <!-- Stage -->
         <div
-          class="cropped-image-container"
-          ref="croppedContainer"
-          @mousedown="startCroppedAnnotation"
-          @mousemove="handleCroppedAnnotation"
-          @mouseup="endCroppedAnnotation"
-          @mouseleave="endCroppedAnnotation"
+          class="crop-stage"
+          ref="croppedStage"
+          :style="{ cursor: croppedStageCursor }"
+          @mousedown="cropStageDown"
+          @mousemove="cropStageMove"
+          @mouseup="cropStageUp"
+          @mouseleave="cropStageUp"
+          @selectstart.prevent.stop
+          @dragstart.prevent.stop
+          @contextmenu.prevent.stop
+          @dblclick.prevent.stop
+          ondragstart="return false"
+          onselectstart="return false"
+          oncontextmenu="return false"
+          unselectable="on"
         >
-          <img
-            :src="croppedImage"
-            alt="Cropped"
-            class="cropped-image"
-            draggable="false"
-            style="display: block; width: 100%; height: auto"
-          />
-
-          <!-- Cropped Highlights -->
-          <div
-            v-if="croppedCurrentHighlight"
-            class="highlight-rectangle"
-            :style="croppedCurrentHighlight.style"
-          ></div>
-          <div
-            v-for="(hl, index) in croppedHighlights"
-            :key="'chl-' + index"
-            class="highlight-rectangle"
-            :style="hl.style"
-          ></div>
-
-          <!-- Cropped Underlines -->
-          <div
-            v-if="croppedCurrentUnderline"
-            class="underline-line"
-            :style="croppedCurrentUnderline.style"
-          ></div>
-          <div
-            v-for="(ul, index) in croppedUnderlines"
-            :key="'cul-' + index"
-            class="underline-line"
-            :style="ul.style"
-          ></div>
-
-          <!-- Cropped Traces & Angles -->
-          <svg
-            class="drawing-layer"
-            :width="popupDimensions.width"
-            :height="popupDimensions.height"
-            style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:2;"
-          >
-            <polyline
-              v-for="(stroke, index) in croppedStrokes"
-              :key="'cstroke-' + index"
-              :points="formatPoints(stroke.points)"
-              :stroke="stroke.color"
-              stroke-width="2"
-              fill="none"
+          <div class="crop-anchor" :style="croppedAnchorStyle">
+            <!-- Base image (fit-to-anchor coordinates) -->
+            <img
+              :src="croppedImage"
+              ref="croppedImg"
+              class="cropped-image"
+              alt=""
+              draggable="false"
+              unselectable="on"
+              @load="onCroppedImgLoad"
+              style="pointer-events: none !important; user-select: none !important;"
+              ondragstart="return false"
+              onselectstart="return false"
+              oncontextmenu="return false"
+              onmousedown="return false"
+              onmouseup="return false"
+              onmousemove="return false"
+              onclick="return false"
             />
-            <polyline
-              v-if="croppedCurrentStroke && croppedCurrentStroke.points && croppedCurrentStroke.points.length"
-              :points="formatPoints(croppedCurrentStroke.points)"
-              :stroke="croppedCurrentStroke.color"
-              stroke-width="2"
-              fill="none"
-            />
-            <!-- temp cropped angle points -->
-            <g v-if="croppedMeasurePoints.length">
-              <circle
-                v-for="(point, index) in croppedMeasurePoints"
-                :key="'cmeasure-point-' + index"
-                :cx="point.x"
-                :cy="point.y"
-                r="5"
-                fill="red"
-                @mousedown.stop="croppedDraggingPoint = index"
-              />
-              <line
-                v-if="croppedMeasurePoints.length >= 2"
-                :x1="croppedMeasurePoints[0].x"
-                :y1="croppedMeasurePoints[0].y"
-                :x2="croppedMeasurePoints[1].x"
-                :y2="croppedMeasurePoints[1].y"
-                stroke="blue"
-                stroke-width="2"
-              />
-              <line
-                v-if="croppedMeasurePoints.length === 3"
-                :x1="croppedMeasurePoints[1].x"
-                :y1="croppedMeasurePoints[1].y"
-                :x2="croppedMeasurePoints[2].x"
-                :y2="croppedMeasurePoints[2].y"
-                stroke="blue"
-                stroke-width="2"
-              />
-              <text
-                v-if="croppedMeasurePoints.length === 3 && croppedCalculatedAngle"
-                :x="croppedMeasurePoints[1].x + 10"
-                :y="croppedMeasurePoints[1].y - 10"
-                fill="darkblue"
-                font-size="12"
-              >
-                {{ croppedCalculatedAngle }}°
-              </text>
-            </g>
 
-            <!-- finalized cropped angles -->
-            <g v-for="(measure, index) in croppedMeasures" :key="'cmeasure-' + index">
-              <line
-                v-if="measure.points.length >= 2"
-                :x1="measure.points[0].x"
-                :y1="measure.points[0].y"
-                :x2="measure.points[1].x"
-                :y2="measure.points[1].y"
-                stroke="blue"
-                stroke-width="2"
+            <!-- Transparent overlay to capture mouse events -->
+            <div class="image-overlay" 
+                 style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; background: transparent; cursor: inherit;"></div>
+
+            <!-- ABS layer (rects/lines) -->
+            <div
+              v-for="(a, i) in croppedAnnotationsAbs"
+              :key="'ca-'+i"
+              v-show="a.type==='highlight' || a.type==='underline'"
+              :class="a.type==='highlight' ? 'highlight-rectangle' : 'underline-line'"
+              :style="a.style"
+            ></div>
+
+            <!-- Live rectangles/lines -->
+            <div
+              v-if="croppedLive.highlight"
+              class="highlight-rectangle"
+              :style="croppedLive.highlight.style"
+            ></div>
+            <div
+              v-if="croppedLive.underline"
+              class="underline-line"
+              :style="croppedLive.underline.style"
+            ></div>
+
+            <!-- SVG layer (traces & angles) -->
+            <svg class="drawing-layer" :width="croppedBaseW" :height="croppedBaseH"
+                 style="position:absolute;inset:0;z-index:2;">
+              <!-- traces -->
+              <polyline
+                v-for="(a, i) in croppedTraces"
+                :key="'ct-'+i"
+                :points="formatPoints(a.points)"
+                :stroke="a.color"
+                :stroke-width="a.penWidth || 2"
+                fill="none"
               />
-              <line
-                v-if="measure.points.length === 3"
-                :x1="measure.points[1].x"
-                :y1="measure.points[1].y"
-                :x2="measure.points[2].x"
-                :y2="measure.points[2].y"
-                stroke="blue"
-                stroke-width="2"
+              <!-- live stroke -->
+              <polyline
+                v-if="croppedLive.trace"
+                :points="formatPoints(croppedLive.trace.points)"
+                :stroke="croppedLive.trace.color"
+                :stroke-width="croppedLive.trace.penWidth || 2"
+                fill="none"
               />
-              <text
-                v-if="measure.points.length === 3 && measure.angle"
-                :x="measure.points[1].x + 10"
-                :y="measure.points[1].y - 10"
-                fill="darkblue"
-                font-size="12"
-              >
-                {{ measure.angle }}°
-              </text>
-              <circle
-                v-for="(point, pi) in measure.points"
-                :key="'cmeasure-final-point-' + pi"
-                :cx="point.x"
-                :cy="point.y"
-                r="5"
-                fill="red"
-              />
-            </g>
-          </svg>
+
+              <!-- angles -->
+              <g v-for="(a, i) in croppedMeasures" :key="'cm-'+i">
+                <line v-if="a.points.length>=2"
+                  :x1="a.points[0].x" :y1="a.points[0].y"
+                  :x2="a.points[1].x" :y2="a.points[1].y"
+                  stroke="blue" stroke-width="2" />
+                <line v-if="a.points.length===3"
+                  :x1="a.points[1].x" :y1="a.points[1].y"
+                  :x2="a.points[2].x" :y2="a.points[2].y"
+                  stroke="blue" stroke-width="2" />
+                <text v-if="a.points.length===3"
+                  :x="a.points[1].x + 10" :y="a.points[1].y - 10"
+                  fill="darkblue" font-size="12">
+                  {{ a.angle }}°{{ a.label ? ' • '+a.label : '' }}
+                </text>
+              </g>
+
+              <!-- live angle points/lines -->
+              <g v-if="croppedLive.measure && croppedLive.measure.points.length">
+                <circle
+                  v-for="(p, idx) in croppedLive.measure.points"
+                  :key="'livep-'+idx"
+                  :cx="p.x" :cy="p.y" r="5" fill="red" />
+                <line v-if="croppedLive.measure.points.length>=2"
+                  :x1="croppedLive.measure.points[0].x" :y1="croppedLive.measure.points[0].y"
+                  :x2="croppedLive.measure.points[1].x" :y2="croppedLive.measure.points[1].y"
+                  stroke="blue" stroke-width="2" />
+                <line v-if="croppedLive.measure.points.length===3"
+                  :x1="croppedLive.measure.points[1].x" :y1="croppedLive.measure.points[1].y"
+                  :x2="croppedLive.measure.points[2].x" :y2="croppedLive.measure.points[2].y"
+                  stroke="blue" stroke-width="2" />
+              </g>
+            </svg>
+          </div>
         </div>
 
-        <div class="popup-actions">
-          <button class="grid-btn" @click="saveCroppedImageAsPNG">Save as PNG</button>
-          <button class="grid-btn" @click="saveCroppedImageAsSVG">Save as SVG</button>
-          <button class="grid-btn" @click="saveCroppedImage">Save with Annotations</button>
-          <button class="grid-btn" @click="closeCroppedPopup">Close</button>
-        </div>
+        <!-- Mini bank (re-uses same UX: multi-select, move, delete) -->
+        <AnnotationsBank
+          class="mini-bank"
+          :page="0"
+          :items="croppedBankItems"
+          :selectedKeys="croppedBankSelected"
+          :multiSelect="croppedBankMulti"
+          :moveActive="croppedMoveActive"
+          @update:selected="(keys)=>croppedBankSelected = keys"
+          @toggle-multi="croppedBankMulti = !croppedBankMulti"
+          @request-move="enableCroppedMove"
+          @cancel-move="disableCroppedMove"
+          @request-delete="deleteSelectedCropped"
+        />
       </div>
     </div>
   </div>
@@ -891,7 +1003,7 @@ export default {
       showAngleFilterPopup: false,
       angleScope: "page",        // 'page' | 'doc'
       angleFilterLabel: "__ALL__", // "__ALL__" or a label
-      angleStatistics: { average: 0, standardDeviation: 0, mode: "No mode" },
+      angleStatistics: { count: 0, mean: 0, median: 0, stdDev: 0, min: 0, max: 0, angles: [] },
       showAngleStatistics: false,
 
       // Bands
@@ -947,15 +1059,20 @@ export default {
       croppedCurrentMeasure: null,
       croppedCurrentHighlight: null,
       croppedCurrentUnderline: null,
+      croppedStartPoint: null,
+      croppedPendingAngle: null,
+      croppedEditingAnnotationIndex: -1,
       popupDimensions: { width: 0, height: 0 },
 
       // Comments
-      comments: [],
+      comments: [],                   // per page (array of arrays)
       showCommentInput: false,
       currentCommentText: "",
-      currentCommentPosition: null,
+      // Where the composer should appear:
+      composerTarget: { side: 'right', t: 0.5 }, // side: 'left'|'right', t in [0..1] vertical relative
       draggingCommentIndex: null,
       dragOffset: { x: 0, y: 0 },
+      suppressNextComment: false,
 
       // UI
       showClearDropdown: false,
@@ -964,13 +1081,128 @@ export default {
 
       // Bank
       bankSelectedKeys: [],
-      bankMultiSelect: true,
+      bankMultiSelect: false,
       moveModeActive: false,
       moveStartPos: null,
       currentMoveDelta: { x: 0, y: 0 },
+
+      // Zoom & Pan
+      zoomLevel: 1,
+      zoomStep: 0.10,
+      minZoom: 1,
+      maxZoom: 3,
+      _holdTimer: null,      // for long-press reset
+      panX: 0,
+      panY: 0,
+      isPanning: false,
+      baseFitWidth: 0,       // image fitted width at 100% zoom
+      baseFitHeight: 0,      // image fitted height at 100% zoom
+
+      // Cropped zoom/pan
+      cropZoom: 1,
+      cropZoomStep: 0.10,
+      cropPanX: 0,
+      cropPanY: 0,
+      isCropPanning: false,
+      _cPanStart: null,
+      croppedBaseW: 0,
+      croppedBaseH: 0,
+
+      // Unified cropped state
+      croppedLive: {
+        trace: null,
+        highlight: null,
+        underline: null,
+        measure: null
+      },
+      croppedAnnotations: [],
+      croppedBankSelected: [],
+      croppedBankMulti: false,
+      croppedMoveActive: false,
     };
   },
   computed: {
+    anchorStyle() {
+      // A fixed box centered in the stage; zoom/pan transform is applied here
+      return {
+        position: 'absolute',
+        left: '50%',
+        top: '50%',
+        width: `${this.baseFitWidth || 0}px`,
+        height: `${this.baseFitHeight || 0}px`,
+        transform: `translate(-50%, -50%) translate(${this.panX}px, ${this.panY}px) scale(${this.zoomLevel})`,
+        transformOrigin: 'center center',
+        zIndex: 100, // below buttons/bank/panels
+      };
+    },
+
+    zoomedWidth() { return this.baseFitWidth  * (this.zoomLevel || 1); },
+    zoomedHeight(){ return this.baseFitHeight * (this.zoomLevel || 1); },
+
+    // Stage cursor: when zoomed, show grab/grabbing; otherwise use your existing logic
+    stageCursor() {
+      if (this.isPanning) return 'grabbing';
+      if (this.zoomLevel > 1) return 'grab';
+      // Fallback to tool cursors
+      return (this.traceModeActive || this.highlightModeActive || this.underlineModeActive || this.measureModeActive || this.isMeasuring || this.moveModeActive)
+        ? 'crosshair'
+        : 'default';
+    },
+
+    imageReady() {
+      return this.imageLoaded && this.baseFitWidth > 0 && this.baseFitHeight > 0;
+    },
+
+    anchorBoxInViewer() {
+      // Page rect in viewer-coordinates after zoom/pan (NOT the image's natural size)
+      const w = this.zoomedWidth;
+      const h = this.zoomedHeight;
+      const left = (this.viewerWidth / 2) - (w / 2) + this.panX;
+      const top  = (this.viewerHeight / 2) - (h / 2) + this.panY;
+      return { left, top, width: w, height: h, right: left + w, bottom: top + h };
+    },
+
+    composerStyle() {
+      if (!this.imageReady) return {};
+      const box = this.anchorBoxInViewer;
+      const pad = 12;             // gap outside page
+      const width = 260;          // composer width
+      const y = box.top + this.composerTarget.t * box.height;
+      const x = this.composerTarget.side === 'left'
+        ? (box.left - pad - width)
+        : (box.right + pad);
+
+      return {
+        position: 'absolute',
+        top: `${Math.round(y)}px`,
+        left: `${Math.round(x)}px`,
+        transform: 'translateY(-50%)',
+        zIndex: 1600
+      };
+    },
+
+    commentStyle() {
+      // returns a function to style each card
+      return (c) => {
+        const box = this.anchorBoxInViewer;
+        const pad = 12;     // gap from page edge
+        const width = 240;  // visual width of comment card
+        const y = box.top + c.t * box.height;
+        const x = c.side === 'left'
+          ? (box.left - pad - width)
+          : (box.right + pad);
+
+        return {
+          position: 'absolute',
+          top: `${Math.round(y)}px`,
+          left: `${Math.round(x)}px`,
+          transform: 'translateY(-50%)',
+          zIndex: 1400,
+          width: `${width}px`
+        };
+      };
+    },
+
     viewerWidth() {
       const viewer = this.$refs.viewer;
       return viewer ? viewer.clientWidth : 0;
@@ -1133,10 +1365,88 @@ export default {
 
       return items;
     },
+
+    // Cropped popup computed properties
+    croppedAnchorStyle() {
+      return {
+        position: 'absolute',
+        left: '50%',
+        top: '50%',
+        width: this.croppedBaseW + 'px',
+        height: this.croppedBaseH + 'px',
+        transform: `translate(-50%,-50%) translate(${this.cropPanX}px, ${this.cropPanY}px) scale(${this.cropZoom})`,
+        transformOrigin: 'center center',
+      };
+    },
+    croppedStageCursor() {
+      if (this.isCropPanning) return 'grabbing';
+      if (this.cropZoom > 1) return 'grab';
+      return 'crosshair';
+    },
+    cropZoomLeftStyle() {
+      const el = this.$refs.croppedStage;
+      if (!el) return {};
+      const y = el.clientHeight/2;
+      const x = el.clientWidth/2 - (this.croppedBaseW*this.cropZoom)/2 + this.cropPanX - 44;
+      return { left: `${Math.round(x)}px`, top: `${Math.round(y)}px`, transform: 'translateY(-50%)' };
+    },
+    cropZoomRightStyle() {
+      const el = this.$refs.croppedStage;
+      if (!el) return {};
+      const y = el.clientHeight/2;
+      const x = el.clientWidth/2 + (this.croppedBaseW*this.cropZoom)/2 + this.cropPanX + 8;
+      return { left: `${Math.round(x)}px`, top: `${Math.round(y)}px`, transform: 'translateY(-50%)' };
+    },
+    // Unified cropped annotations system
+    croppedAnnotationsAbs() {
+      return this.croppedAnnotations.filter(a => a.type === 'highlight' || a.type === 'underline').map(a => ({
+        ...a,
+        style: a.type === 'highlight' ? {
+          position: 'absolute',
+          left: `${a.rect.left}px`,
+          top: `${a.rect.top}px`,
+          width: `${a.rect.width}px`,
+          height: `${a.rect.height}px`,
+          backgroundColor: a.color,
+          opacity: 0.3,
+          pointerEvents: 'none'
+        } : {
+          position: 'absolute',
+          left: `${a.line.x1}px`,
+          top: `${a.line.y1}px`,
+          width: `${Math.abs(a.line.x2 - a.line.x1)}px`,
+          height: `${Math.abs(a.line.y2 - a.line.y1) || 2}px`,
+          backgroundColor: a.color,
+          pointerEvents: 'none'
+        }
+      }));
+    },
+    croppedAnnotationsSvg() {
+      return this.croppedAnnotations.filter(a => a.type === 'trace' || a.type === 'measure');
+    },
+    croppedTraces() {
+      return this.croppedAnnotations.filter(a => a.type === 'trace');
+    },
+    croppedMeasures() {
+      return this.croppedAnnotations.filter(a => a.type === 'measure');
+    },
+    croppedBankItems() {
+      return this.croppedAnnotations.map((a, i) => ({
+        key: `c${i}`,
+        category: a.type,
+        title: a.type === 'trace' ? 'Trace' : 
+               a.type === 'measure' ? `Angle (${a.angle || ''}°)` :
+               a.type === 'highlight' ? 'Highlight' : 'Underline',
+        subtitle: a.type === 'trace' ? `${a.points?.length || 0} pts` : '',
+        color: a.color || (a.type === 'measure' ? 'blue' : a.type === 'highlight' ? 'rgba(255,255,0,0.8)' : '#3b82f6')
+      }));
+    },
   },
   watch: {
     currentPage(n) {
       this.pageInput = n + 1;
+      // Clear bank selections when page changes
+      this.bankSelectedKeys = [];
     },
   },
   async created() {
@@ -1166,7 +1476,41 @@ export default {
         if (measurement) this.dragLabel(this.draggedLabelIndex, e);
       }
     };
+    
+    // Initialize fit computation
+    this.$nextTick(() => {
+      this.computeBaseFit();  // in case the image is cached and loads instantly
+    });
+    window.addEventListener('resize', this.computeBaseFit);
+    
+    // Global selection prevention for cropped popup
+    this._preventSelection = (e) => {
+      if (this.croppedImage && (e.target.closest('.cropped-popup') || e.target.closest('.crop-stage'))) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+      }
+    };
+    
+    document.addEventListener('selectstart', this._preventSelection, true);
+    document.addEventListener('dragstart', this._preventSelection, true);
+    document.addEventListener('contextmenu', this._preventSelection, true);
   },
+
+  beforeUnmount() {
+    window.removeEventListener('resize', this.computeBaseFit);
+    
+    // Clean up global selection prevention
+    if (this._preventSelection) {
+      document.removeEventListener('selectstart', this._preventSelection, true);
+      document.removeEventListener('dragstart', this._preventSelection, true);
+      document.removeEventListener('contextmenu', this._preventSelection, true);
+    }
+    
+    // Clean up body class if component is destroyed while popup is open
+    document.body.classList.remove('cropped-popup-active');
+  },
+
   methods: {
     goHome() {
       const ok = window.confirm(
@@ -1174,6 +1518,57 @@ export default {
       );
       if (ok) {
         this.$router.push({ name: "IIIFInput" });
+      }
+    },
+
+    clampPan() {
+      if (!this.imageReady) return;
+      
+      const scale = this.zoomLevel;
+      const actualWidth = this.baseFitWidth * scale;
+      const actualHeight = this.baseFitHeight * scale;
+      const viewer = this.$refs.viewer;
+      if (!viewer) return;
+      
+      const vw = viewer.clientWidth;
+      const vh = viewer.clientHeight;
+      
+      const maxPanX = Math.max(0, (actualWidth - vw) / 2);
+      const maxPanY = Math.max(0, (actualHeight - vh) / 2);
+      
+      this.panX = Math.min(Math.max(-maxPanX, this.panX), maxPanX);
+      this.panY = Math.min(Math.max(-maxPanY, this.panY), maxPanY);
+    },
+
+    zoomIn() {
+      if (!this.imageReady) return;
+      this.zoomLevel = Math.min(this.maxZoom, +(this.zoomLevel + this.zoomStep).toFixed(2));
+      this.clampPan();
+    },
+    zoomOut() {
+      if (!this.imageReady) return;
+      // Regular click: step down, but not below min
+      this.zoomLevel = Math.max(this.minZoom, +(this.zoomLevel - this.zoomStep).toFixed(2));
+      // Optional: clamp pan so content stays reachable
+      this.clampPan();
+    },
+    resetZoom() {
+      if (!this.imageReady) return;
+      this.zoomLevel = 1;
+      this.panX = 0;
+      this.panY = 0;
+    },
+    startHoldReset() {
+      // Long press (3s) to reset to 100%
+      this._holdTimer = setTimeout(() => {
+        this.resetZoom();
+        this._holdTimer = null;
+      }, 3000);
+    },
+    cancelHoldReset() {
+      if (this._holdTimer) {
+        clearTimeout(this._holdTimer);
+        this._holdTimer = null;
       }
     },
 
@@ -1202,14 +1597,27 @@ export default {
 
     /* ---------- Helpers ---------- */
     getMousePosition(event) {
-      const viewerElement = this.$refs.viewer;
-      const rect = viewerElement.getBoundingClientRect();
-      const scrollLeft = viewerElement.scrollLeft || 0;
-      const scrollTop = viewerElement.scrollTop || 0;
-      return {
-        x: event.clientX - rect.left + scrollLeft,
-        y: event.clientY - rect.top + scrollTop,
-      };
+      const viewer = this.$refs.viewer;
+      const rect = viewer.getBoundingClientRect();
+
+      // Stage center in viewport coords
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+
+      // Pointer delta from stage center in screen px
+      const dxScreen = event.clientX - centerX;
+      const dyScreen = event.clientY - centerY;
+
+      // Undo pan & zoom to get into anchor local space (0,0 at anchor center)
+      const z = this.zoomLevel || 1;
+      const dxLocal = (dxScreen - this.panX) / z;
+      const dyLocal = (dyScreen - this.panY) / z;
+
+      // Convert from anchor-center coords to anchor-top-left coords
+      const x = dxLocal + (this.baseFitWidth  / 2);
+      const y = dyLocal + (this.baseFitHeight / 2);
+
+      return { x, y };
     },
     formatPoints(points) {
       return points.map(({ x, y }) => `${x},${y}`).join(" ");
@@ -1235,7 +1643,16 @@ export default {
       return selected;
     },
     parseBankKey(key) {
-      const [kind, ref] = String(key).split(":");
+      if (!key || typeof key !== 'string') {
+        console.error('Invalid bank key:', key);
+        return { kind: '', ref: '' };
+      }
+      const parts = String(key).split(":");
+      if (parts.length !== 2) {
+        console.error('Invalid bank key format:', key);
+        return { kind: '', ref: '' };
+      }
+      const [kind, ref] = parts;
       return { kind, ref };
     },
 
@@ -1296,6 +1713,13 @@ export default {
         this.croppingStarted = false;
         this.cropButtonClicked = false;
         this.showStatsPanel = false;
+        // Close any open comment input when switching tools
+        this.showCommentInput = false;
+        this.currentCommentText = "";
+        // Clear cropped popup tool state
+        this.croppedStartPoint = null;
+        this.croppedLive.highlight = null;
+        this.croppedLive.underline = null;
       };
 
       if (tool === "trace") {
@@ -1313,6 +1737,12 @@ export default {
       }
 
       if (tool === "measure") {
+        // toggle
+        if (this.measureModeActive) {
+          this.measureModeActive = false;
+          this.showToolMessage("Angle measurement mode deactivated.");
+          return;
+        }
         resetAll();
         // open label chooser first
         this.showAngleLabelPopup = true;
@@ -1422,6 +1852,8 @@ export default {
         this.showToolMessage("Choose or create a label first.");
         return;
       }
+      
+      // Normal flow: close popup and activate measure mode
       this.showAngleLabelPopup = false;
       this.measureModeActive = true;
       this.showToolMessage(`Angle measure: label "${this.activeAngleLabel}". Click 3 points (A, vertex, B).`);
@@ -1498,38 +1930,91 @@ cancelPenSelection() {
 
     /* ---------- Comments ---------- */
     startComment(event) {
-      const { x, y } = this.getMousePosition(event);
-      this.currentCommentPosition = { x, y };
+      // Only proceed if comment mode is actually active
+      if (!this.commentModeActive) return;
+      
+      if (this.suppressNextComment) {
+        this.suppressNextComment = false;
+        return;
+      }
+
+      // Only respond if click is inside the page (anchor) bounds
+      const local = this.getMousePosition(event); // anchor-local coords
+      if (
+        local.x < 0 || local.y < 0 ||
+        local.x > this.baseFitWidth || local.y > this.baseFitHeight
+      ) return;
+
+      const isLeftHalf = local.x < (this.baseFitWidth / 2);
+      const side = isLeftHalf ? 'left' : 'right';
+      const t = Math.max(0, Math.min(1, local.y / this.baseFitHeight));
+
+      this.composerTarget = { side, t };
+      this.currentCommentText = "";
       this.showCommentInput = true;
     },
+
     addComment() {
-      if (!this.currentCommentText) return;
+      if (!this.currentCommentText.trim()) return;
       if (!this.comments[this.currentPage]) this.comments[this.currentPage] = [];
+
       this.comments[this.currentPage].push({
-        text: this.currentCommentText,
-        x: this.currentCommentPosition.x,
-        y: this.currentCommentPosition.y + 100,
+        side: this.composerTarget.side,
+        t: Math.max(0, Math.min(1, this.composerTarget.t)),
+        text: this.currentCommentText.trim(),
       });
+
       this.currentCommentText = "";
       this.showCommentInput = false;
+      this.commentModeActive = false; // <-- disable comment mode after adding one comment
+      this.suppressNextComment = true; // <-- prevents instant re-open
     },
+
     cancelComment() {
       this.currentCommentText = "";
-      this.currentCommentPosition = null;
       this.showCommentInput = false;
+      this.commentModeActive = false; // <-- disable comment mode when canceling
+      this.suppressNextComment = true; // <-- prevents instant re-open
     },
+
     startDraggingComment(index, event) {
       this.draggingCommentIndex = index;
-      const comment = this.comments[this.currentPage][index];
-      this.dragOffset = { x: event.clientX - comment.x, y: event.clientY - comment.y };
+      // keep where the pointer is relative to card's top-left; we'll convert to side/t on move
+      const viewer = this.$refs.viewer.getBoundingClientRect();
+      this.dragOffset = {
+        x: event.clientX - viewer.left,
+        y: event.clientY - viewer.top,
+      };
     },
+
     dragComment(event) {
-      if (this.draggingCommentIndex !== null) {
-        const comment = this.comments[this.currentPage][this.draggingCommentIndex];
-        comment.x = event.clientX - this.dragOffset.x;
-        comment.y = event.clientY - this.dragOffset.y;
+      if (this.draggingCommentIndex === null) return;
+
+      // Pointer position in viewer space
+      const viewerRect = this.$refs.viewer.getBoundingClientRect();
+      const px = event.clientX - viewerRect.left;
+      const py = event.clientY - viewerRect.top;
+
+      // Snap horizontally to the closer page edge; map vertically to t
+      const box = this.anchorBoxInViewer;
+      // If page not ready, skip
+      if (box.width <= 0 || box.height <= 0) return;
+
+      const distLeft  = Math.abs(px - box.left);
+      const distRight = Math.abs(px - box.right);
+      const side = (distLeft <= distRight) ? 'left' : 'right';
+
+      // t is 0..1 within page box
+      const t = Math.max(0, Math.min(1, (py - box.top) / box.height));
+
+      const pageComments = this.comments[this.currentPage] || [];
+      const c = pageComments[this.draggingCommentIndex];
+      if (c) {
+        c.side = side;
+        c.t = t;
       }
     },
+
     stopDraggingComment() {
       this.draggingCommentIndex = null;
     },
@@ -1644,6 +2129,21 @@ cancelPenSelection() {
 
     /* ---------- Stage interactions (DROP-IN versions) ---------- */
     startTrace(event) {
+      // PAN START: when zoomed and user isn't starting another tool action, start panning
+      if (this.zoomLevel > 1) {
+        const noToolActive = !(
+          this.traceModeActive || this.measureModeActive || this.highlightModeActive ||
+          this.underlineModeActive || this.lengthMeasurementActive || this.croppingStarted ||
+          this.commentModeActive || this.moveModeActive
+        );
+        // If no tool is active, use drag to pan
+        if (noToolActive) {
+          this.isPanning = true;
+          this._panStart = { x: event.clientX, y: event.clientY, panX: this.panX, panY: this.panY };
+          return; // don't trigger drawing if we're panning
+        }
+      }
+
       // MOVE MODE
       if (this.moveModeActive && this.bankSelectedKeys.length > 0) {
         this.moveStartPos = this.getMousePosition(event);
@@ -1756,6 +2256,16 @@ cancelPenSelection() {
     },
 
     trace(event) {
+      // PAN MOVE
+      if (this.isPanning && this._panStart) {
+        const dx = event.clientX - this._panStart.x;
+        const dy = event.clientY - this._panStart.y;
+        this.panX = this._panStart.panX + dx;
+        this.panY = this._panStart.panY + dy;
+        this.clampPan();
+        return; // swallow draw events while panning
+      }
+
       // MOVE MODE: show live movement preview
       if (this.moveModeActive && this.bankSelectedKeys.length > 0 && this.moveStartPos) {
         const currentPos = this.getMousePosition(event);
@@ -1843,6 +2353,13 @@ cancelPenSelection() {
     },
 
     endTrace(event) {
+      // PAN END
+      if (this.isPanning) {
+        this.isPanning = false;
+        this._panStart = null;
+        return; // end pan, do not create artifacts
+      }
+
       // MOVE MODE: apply delta
       if (this.moveModeActive && this.bankSelectedKeys.length > 0 && this.moveStartPos) {
         const endPos = this.getMousePosition(event);
@@ -1901,9 +2418,30 @@ cancelPenSelection() {
       return { annotationIndex: best.annotationIndex, pointIndex: best.pointIndex };
     },
 
+    /* ---------- Cropped Angle helpers ---------- */
+    findNearestCroppedPoint(x, y, threshold = 10) {
+      const all = this.croppedAnnotations
+        .map((a, i) => ({ a, i }))
+        .filter(({ a }) => a && a.type === "measure");
+
+      let best = { annotationIndex: -1, pointIndex: -1, dist: Infinity };
+      all.forEach(({ a, i }) => {
+        if (a.points && a.points.length > 0) {
+          a.points.forEach((p, pi) => {
+            const d = Math.hypot(x - p.x, y - p.y);
+            if (d < threshold && d < best.dist) best = { annotationIndex: i, pointIndex: pi, dist: d };
+          });
+        }
+      });
+      return { annotationIndex: best.annotationIndex, pointIndex: best.pointIndex };
+    },
+
     /* ---------- Move selected ---------- */
     enableMoveMode() {
-      if (this.bankSelectedKeys.length === 0) return;
+      if (this.bankSelectedKeys.length === 0) {
+        this.showToolMessage("Please select items to move first.");
+        return;
+      }
       this.moveModeActive = true;
       this.showToolMessage("Move mode: drag on the image to reposition selected items.");
     },
@@ -1914,74 +2452,110 @@ cancelPenSelection() {
     applyMoveDelta(dx, dy) {
       const page = this.currentPage;
       this.bankSelectedKeys.forEach((k) => {
-        const { kind, ref } = this.parseBankKey(k);
-        if (kind === "a") {
-          const i = +ref;
-          const a = this.annotationsByPage[page]?.[i];
-          if (!a) return;
-          if (a.type === "highlight" || a.type === "underline") {
-            a.x += dx; a.y += dy;
-          } else if (a.type === "trace" || a.type === "measure") {
-            a.points = a.points.map((p) => ({ x: p.x + dx, y: p.y + dy }));
-          }
-        }
-        if (kind === "c") {
-          const i = +ref;
-          const c = this.comments[page]?.[i];
-          if (!c) return;
-          c.x += dx; c.y += dy;
-        }
-        if (kind === "l") {
-          const id = ref;
-          for (const label in this.lengthMeasurements) {
-            const arr = this.lengthMeasurements[label]?.[page];
-            if (!Array.isArray(arr)) continue;
-            const m = arr.find((mm) => String(mm.id) === String(id));
-            if (m) {
-              m.x += dx; m.y += dy;
-              if (this.labelPositions[id]) {
-                this.labelPositions[id] = {
-                  x: (this.labelPositions[id].x || 0) + dx,
-                  y: (this.labelPositions[id].y || 0) + dy,
-                };
+        try {
+          const { kind, ref } = this.parseBankKey(k);
+          if (kind === "a") {
+            const i = +ref;
+            if (isNaN(i)) return;
+            const a = this.annotationsByPage[page]?.[i];
+            if (!a) return;
+            if (a.type === "highlight" || a.type === "underline") {
+              a.x = (a.x || 0) + dx; 
+              a.y = (a.y || 0) + dy;
+            } else if (a.type === "trace" || a.type === "measure") {
+              if (Array.isArray(a.points)) {
+                a.points = a.points.map((p) => ({ x: (p.x || 0) + dx, y: (p.y || 0) + dy }));
               }
-              break;
             }
           }
+          if (kind === "c") {
+            const i = +ref;
+            if (isNaN(i)) return;
+            const c = this.comments[page]?.[i];
+            if (!c) return;
+            c.x = (c.x || 0) + dx; 
+            c.y = (c.y || 0) + dy;
+          }
+          if (kind === "l") {
+            const id = ref;
+            for (const label in this.lengthMeasurements) {
+              const arr = this.lengthMeasurements[label]?.[page];
+              if (!Array.isArray(arr)) continue;
+              const m = arr.find((mm) => String(mm.id) === String(id));
+              if (m) {
+                m.x = (m.x || 0) + dx; 
+                m.y = (m.y || 0) + dy;
+                if (this.labelPositions[id]) {
+                  this.labelPositions[id] = {
+                    x: (this.labelPositions[id].x || 0) + dx,
+                    y: (this.labelPositions[id].y || 0) + dy,
+                  };
+                }
+                break;
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error applying move delta to item:', k, error);
         }
       });
     },
     deleteSelectedFromBank() {
-      if (this.bankSelectedKeys.length === 0) return;
+      if (this.bankSelectedKeys.length === 0) {
+        this.showToolMessage("Please select items to delete first.");
+        return;
+      }
+      
       const page = this.currentPage;
-
       const annIdxs = [];
       const cmtIdxs = [];
       const lengthIds = [];
 
+      // Parse and validate all selected keys first
       this.bankSelectedKeys.forEach((k) => {
-        const { kind, ref } = this.parseBankKey(k);
-        if (kind === "a") annIdxs.push(+ref);
-        if (kind === "c") cmtIdxs.push(+ref);
-        if (kind === "l") lengthIds.push(ref);
+        try {
+          const { kind, ref } = this.parseBankKey(k);
+          if (kind === "a") {
+            const idx = parseInt(ref);
+            if (!isNaN(idx)) annIdxs.push(idx);
+          }
+          if (kind === "c") {
+            const idx = parseInt(ref);
+            if (!isNaN(idx)) cmtIdxs.push(idx);
+          }
+          if (kind === "l") lengthIds.push(ref);
+        } catch (error) {
+          console.error('Error parsing bank key:', k, error);
+        }
       });
 
+      // Delete annotations (from highest index to lowest to avoid index shifting)
       if (annIdxs.length) {
+        if (!this.annotationsByPage[page]) {
+          this.annotationsByPage[page] = [];
+        }
         const sorted = [...annIdxs].sort((a,b)=>b-a);
         sorted.forEach((i) => {
-          if (this.annotationsByPage[page]?.[i] != null) {
+          if (this.annotationsByPage[page][i] != null) {
             this.annotationsByPage[page].splice(i, 1);
           }
         });
       }
+      
+      // Delete comments (from highest index to lowest)
       if (cmtIdxs.length) {
+        if (!this.comments[page]) {
+          this.comments[page] = [];
+        }
         const sorted = [...cmtIdxs].sort((a,b)=>b-a);
         sorted.forEach((i) => {
-          if (this.comments[page]?.[i] != null) {
+          if (this.comments[page][i] != null) {
             this.comments[page].splice(i, 1);
           }
         });
       }
+      
+      // Delete length measurements
       if (lengthIds.length) {
         for (const label in this.lengthMeasurements) {
           const pageArr = this.lengthMeasurements[label]?.[page];
@@ -1989,19 +2563,38 @@ cancelPenSelection() {
             this.lengthMeasurements[label][page] = pageArr.filter((m) => !lengthIds.includes(String(m.id)));
           }
         }
-        lengthIds.forEach((id) => { if (this.labelPositions[id]) delete this.labelPositions[id]; });
+        lengthIds.forEach((id) => { 
+          if (this.labelPositions[id]) delete this.labelPositions[id]; 
+        });
       }
 
+      // Clear selection after successful deletion
       this.bankSelectedKeys = [];
+      this.showToolMessage(`Deleted ${annIdxs.length + cmtIdxs.length + lengthIds.length} items.`);
     },
 
     /* ---------- Image & crop ---------- */
+    computeBaseFit() {
+      const img = this.$refs.image;
+      const viewer = this.$refs.viewer;
+      if (!img || !viewer) return;
+
+      const natW = img.naturalWidth || 0;
+      const natH = img.naturalHeight || 0;
+      const vw = viewer.clientWidth || 0;
+      const vh = viewer.clientHeight || 0;
+      if (!natW || !natH || !vw || !vh) return;
+
+      const s = Math.min(vw / natW, vh / natH);
+      this.baseFitWidth  = Math.max(1, natW * s);
+      this.baseFitHeight = Math.max(1, natH * s);
+    },
+
     handleImageLoad() {
-      const imageElement = this.$refs.image;
-      if (imageElement) {
-        const displayedWidth = imageElement.width;
-        const naturalWidth = imageElement.naturalWidth;
-        this.scalingFactor = displayedWidth / naturalWidth;
+      this.computeBaseFit();
+      const img = this.$refs.image;
+      if (img && img.naturalWidth) {
+        this.scalingFactor = (this.baseFitWidth || img.width) / img.naturalWidth;
       }
       this.imageLoaded = true;
     },
@@ -2048,6 +2641,10 @@ cancelPenSelection() {
             scaledHeight
           );
           this.croppedImage = canvas.toDataURL("image/png");
+          
+          // Add class to body for proper z-index management
+          document.body.classList.add('cropped-popup-active');
+          
           resolve();
         };
         img.onerror = reject;
@@ -2068,8 +2665,497 @@ cancelPenSelection() {
       link.click();
       URL.revokeObjectURL(link.href);
     },
+    calculateCroppedAngleStatistics() {
+      // Get only angles from cropped annotations
+      const croppedAngles = this.croppedAnnotations.filter(annotation => annotation.type === 'measure');
+      
+      if (croppedAngles.length === 0) {
+        alert('No angles found in the cropped image.');
+        return;
+      }
+      
+      // Calculate statistics for cropped angles only
+      const angleDegrees = croppedAngles.map(annotation => {
+        // Use the points array for calculation
+        if (annotation.points && annotation.points.length >= 3) {
+          const point1 = annotation.points[0];
+          const vertex = annotation.points[1]; 
+          const point2 = annotation.points[2];
+          
+          const vector1 = { x: point1.x - vertex.x, y: point1.y - vertex.y };
+          const vector2 = { x: point2.x - vertex.x, y: point2.y - vertex.y };
+          
+          const dot = vector1.x * vector2.x + vector1.y * vector2.y;
+          const mag1 = Math.sqrt(vector1.x * vector1.x + vector1.y * vector1.y);
+          const mag2 = Math.sqrt(vector2.x * vector2.x + vector2.y * vector2.y);
+          
+          const cosAngle = dot / (mag1 * mag2);
+          const clampedCos = Math.max(-1, Math.min(1, cosAngle));
+          return Math.acos(clampedCos) * (180 / Math.PI);
+        }
+        // Fallback to stored angle value if calculation fails
+        return annotation.angle || 0;
+      });
+      
+      // Calculate statistics
+      const sum = angleDegrees.reduce((a, b) => a + b, 0);
+      const mean = sum / angleDegrees.length;
+      const sortedAngles = [...angleDegrees].sort((a, b) => a - b);
+      const median = sortedAngles.length % 2 === 0
+        ? (sortedAngles[sortedAngles.length / 2 - 1] + sortedAngles[sortedAngles.length / 2]) / 2
+        : sortedAngles[Math.floor(sortedAngles.length / 2)];
+      
+      const variance = angleDegrees.reduce((acc, angle) => acc + Math.pow(angle - mean, 2), 0) / angleDegrees.length;
+      const stdDev = Math.sqrt(variance);
+      
+      // Set results and show popup
+      this.angleStatistics = {
+        count: croppedAngles.length,
+        mean: mean.toFixed(2),
+        median: median.toFixed(2),
+        stdDev: stdDev.toFixed(2),
+        min: Math.min(...angleDegrees).toFixed(2),
+        max: Math.max(...angleDegrees).toFixed(2),
+        angles: angleDegrees.map(a => a.toFixed(2))
+      };
+      
+      this.showAngleStatistics = true;
+    },
     closeCroppedPopup() {
+      // Clear cropped annotations (temporary labels will be removed)
+      this.croppedAnnotations = [];
+      this.croppedLive = { highlight: null, underline: null, trace: null };
+      this.croppedStartPoint = null;
+      
       this.croppedImage = null;
+      
+      // Remove class from body
+      document.body.classList.remove('cropped-popup-active');
+      
+      // Reset unified cropped state
+      this.croppedLive = {
+        trace: null,
+        highlight: null,
+        underline: null,
+        measure: null
+      };
+      this.croppedAnnotations = [];
+      this.croppedBankSelected = [];
+      this.croppedBankMulti = false;
+      this.croppedMoveActive = false;
+      
+      // Reset zoom/pan
+      this.cropZoom = 1;
+      this.cropPanX = 0;
+      this.cropPanY = 0;
+      this.isCropPanning = false;
+    },
+
+    // Cropped image loading and sizing
+    onCroppedImgLoad() {
+      const img = this.$refs.croppedImg;
+      if (!img) return;
+      
+      // Wait for the image to be fully laid out
+      this.$nextTick(() => {
+        // Use displayed size (which preserves aspect ratio) for coordinates
+        this.croppedBaseW = img.offsetWidth || img.clientWidth;
+        this.croppedBaseH = img.offsetHeight || img.clientHeight;
+        
+        // Fallback to natural size if displayed size is 0
+        if (this.croppedBaseW === 0 || this.croppedBaseH === 0) {
+          // Calculate the displayed size based on natural dimensions and container
+          const container = this.$refs.croppedStage;
+          if (container) {
+            const containerW = container.clientWidth;
+            const containerH = container.clientHeight - 40; // account for padding
+            const naturalW = img.naturalWidth;
+            const naturalH = img.naturalHeight;
+            
+            if (naturalW && naturalH) {
+              const aspectRatio = naturalW / naturalH;
+              if (containerW / containerH > aspectRatio) {
+                // Container is wider than image aspect ratio
+                this.croppedBaseH = containerH;
+                this.croppedBaseW = containerH * aspectRatio;
+              } else {
+                // Container is taller than image aspect ratio  
+                this.croppedBaseW = containerW;
+                this.croppedBaseH = containerW / aspectRatio;
+              }
+            }
+          }
+        }
+        
+        // reset view
+        this.cropZoom = 1;
+        this.cropPanX = 0;
+        this.cropPanY = 0;
+      });
+    },
+
+    // Prevent any image interaction
+    handleImageMouseDown(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      return false;
+    },
+
+    // Prevent main image interaction
+    handleMainImageMouseDown(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      return false;
+    },
+
+    // Cropped zoom/pan methods
+    cropZoomIn() {
+      this.cropZoom = Math.min(4, +(this.cropZoom + this.cropZoomStep).toFixed(2));
+      this._clampCropPan();
+    },
+    cropZoomOut() {
+      this.cropZoom = Math.max(1, +(this.cropZoom - this.cropZoomStep).toFixed(2));
+      this._clampCropPan();
+    },
+    _clampCropPan() {
+      // allow small margin
+      const margin = 120;
+      const maxX = (this.croppedBaseW * (this.cropZoom - 1)) / 2 + margin;
+      const maxY = (this.croppedBaseH * (this.cropZoom - 1)) / 2 + margin;
+      this.cropPanX = Math.max(-maxX, Math.min(maxX, this.cropPanX));
+      this.cropPanY = Math.max(-maxY, Math.min(maxY, this.cropPanY));
+    },
+
+    // Coordinate transform for cropped popup
+    getCroppedMouse(event) {
+      const img = this.$refs.croppedImg;
+      const anchor = img?.parentElement; // crop-anchor div
+      
+      if (!img || !anchor || this.croppedBaseW === 0 || this.croppedBaseH === 0) {
+        return { x: 0, y: 0 };
+      }
+
+      // Get the anchor bounds (this has the transform applied)
+      const anchorRect = anchor.getBoundingClientRect();
+      
+      // Calculate mouse position relative to the transformed anchor
+      const relativeX = event.clientX - anchorRect.left;
+      const relativeY = event.clientY - anchorRect.top;
+      
+      // Convert back to original image coordinates (undo zoom)
+      const imageX = relativeX / this.cropZoom;
+      const imageY = relativeY / this.cropZoom;
+      
+      return {
+        x: Math.max(0, Math.min(this.croppedBaseW, imageX)),
+        y: Math.max(0, Math.min(this.croppedBaseH, imageY))
+      };
+    },
+
+    // ===== UNIFIED CROPPED MOUSE HANDLERS =====
+    cropStageDown(e) {
+      // Clear any existing selection immediately
+      if (window.getSelection) {
+        window.getSelection().removeAllRanges();
+      } else if (document.selection) {
+        document.selection.empty();
+      }
+      
+      // Prevent default behavior
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const toolActive = this.traceModeActive || this.measureModeActive || this.highlightModeActive || this.underlineModeActive;
+      
+      // Pan when zoomed and no tool active
+      if (this.cropZoom > 1 && !toolActive) {
+        this.isCropPanning = true;
+        this._cPanStart = { x: e.clientX, y: e.clientY, panX: this.cropPanX, panY: this.cropPanY };
+        return;
+      }
+
+      // Get unified mouse coordinates
+      const { x, y } = this.getCroppedMouse(e);
+
+      // HIGHLIGHT / UNDERLINE - Two-click system like main page
+      if (this.highlightModeActive || this.underlineModeActive) {
+        if (!this.croppedStartPoint) {
+          // First click - set start point
+          this.croppedStartPoint = { x, y };
+          if (this.highlightModeActive) {
+            this.croppedLive.highlight = {
+              startX: x, startY: y,
+              style: { 
+                position: 'absolute', 
+                left: `${x}px`, 
+                top: `${y}px`, 
+                width: '0px', 
+                height: '0px', 
+                backgroundColor: 'rgba(255,255,0,0.3)' 
+              }
+            };
+          } else if (this.underlineModeActive) {
+            this.croppedLive.underline = {
+              startX: x, startY: y,
+              style: { 
+                position: 'absolute', 
+                left: `${x}px`, 
+                top: `${y}px`, 
+                width: '0px', 
+                height: '2px', 
+                backgroundColor: 'blue' 
+              }
+            };
+          }
+          return;
+        } else {
+          // Second click - complete the annotation
+          if (this.highlightModeActive && this.croppedLive.highlight) {
+            const rect = {
+              left: parseInt(this.croppedLive.highlight.style.left),
+              top: parseInt(this.croppedLive.highlight.style.top),
+              width: parseInt(this.croppedLive.highlight.style.width),
+              height: parseInt(this.croppedLive.highlight.style.height)
+            };
+            
+            if (rect.width > 5 && rect.height > 5) { // Minimum size
+              this.croppedAnnotations.push({
+                type: 'highlight',
+                rect: rect,
+                color: 'rgba(255,255,0,0.3)'
+              });
+            }
+            this.croppedLive.highlight = null;
+          } else if (this.underlineModeActive && this.croppedLive.underline) {
+            const line = {
+              x1: parseInt(this.croppedLive.underline.style.left),
+              y1: parseInt(this.croppedLive.underline.style.top),
+              x2: parseInt(this.croppedLive.underline.style.left) + parseInt(this.croppedLive.underline.style.width),
+              y2: parseInt(this.croppedLive.underline.style.top)
+            };
+            
+            if (Math.abs(line.x2 - line.x1) > 5) { // Minimum length
+              this.croppedAnnotations.push({
+                type: 'underline',
+                line: line,
+                color: 'blue'
+              });
+            }
+            this.croppedLive.underline = null;
+          }
+          this.croppedStartPoint = null;
+          return;
+        }
+      }
+
+      // Trace mode
+      if (this.traceModeActive) {
+        this.croppedLive.trace = {
+          color: this.generateRandomColor(),
+          penWidth: 2,
+          points: [{ x, y }]
+        };
+        return;
+      }
+
+      // Measure mode (3-click angle) - Follow main page logic exactly
+      if (this.measureModeActive) {
+        // First check if clicking near an existing angle point for editing
+        const nearest = this.findNearestCroppedPoint(x, y, 10);
+        if (nearest.annotationIndex !== -1) {
+          // Start editing existing angle
+          this.croppedEditingAnnotationIndex = nearest.annotationIndex;
+          this.croppedDraggingPoint = nearest.pointIndex;
+          const ann = this.croppedAnnotations[this.croppedEditingAnnotationIndex];
+          // Copy the points for editing
+          this.croppedLive.measure = { points: [...ann.points] };
+          return;
+        }
+        
+        // Otherwise, create new angle
+        if (!this.croppedLive.measure) {
+          this.croppedLive.measure = { points: [] };
+        }
+        
+        // Check if we've already collected 3 points
+        if (this.croppedLive.measure.points.length >= 3) return;
+        
+        this.croppedLive.measure.points.push({ x, y });
+        
+        if (this.croppedLive.measure.points.length === 3) {
+          // Calculate angle and immediately save it (like main page)
+          const angle = this.calculateAngle(
+            this.croppedLive.measure.points[0],
+            this.croppedLive.measure.points[1],
+            this.croppedLive.measure.points[2]
+          );
+          
+          // Save to cropped annotations immediately using active label
+          this.croppedAnnotations.push({
+            type: 'measure',
+            point1: this.croppedLive.measure.points[0],
+            vertex: this.croppedLive.measure.points[1],
+            point2: this.croppedLive.measure.points[2],
+            points: [...this.croppedLive.measure.points],
+            angle: Math.round(angle),
+            label: this.activeAngleLabel || "Unlabeled",
+            color: 'blue'
+          });
+          
+          // Add label to list if new (like main page)
+          if (this.activeAngleLabel && !this.angleLabels.includes(this.activeAngleLabel)) {
+            this.angleLabels.push(this.activeAngleLabel);
+          }
+          
+          // Clear the live measure
+          this.croppedLive.measure = null;
+        }
+        return;
+      }
+    },
+
+    cropStageMove(e) {
+      // Clear any selection that might appear during dragging
+      if (window.getSelection && window.getSelection().rangeCount > 0) {
+        window.getSelection().removeAllRanges();
+      }
+      
+      // Handle panning
+      if (this.isCropPanning && this._cPanStart) {
+        const dx = e.clientX - this._cPanStart.x;
+        const dy = e.clientY - this._cPanStart.y;
+        this.cropPanX = this._cPanStart.panX + dx;
+        this.cropPanY = this._cPanStart.panY + dy;
+        this._clampCropPan();
+        return;
+      }
+
+      const { x, y } = this.getCroppedMouse(e);
+
+      // Handle angle point dragging
+      if (this.measureModeActive && this.croppedDraggingPoint !== -1 && this.croppedLive.measure) {
+        // Update the dragged point position
+        this.croppedLive.measure.points[this.croppedDraggingPoint] = { x, y };
+        
+        // If editing an existing annotation, update it
+        if (this.croppedEditingAnnotationIndex !== -1) {
+          const ann = this.croppedAnnotations[this.croppedEditingAnnotationIndex];
+          ann.points[this.croppedDraggingPoint] = { x, y };
+          
+          // Recalculate angle
+          if (ann.points.length === 3) {
+            const angle = this.calculateAngle(ann.points[0], ann.points[1], ann.points[2]);
+            ann.angle = Math.round(angle);
+          }
+        }
+        return;
+      }
+
+      // Update live highlight
+      if (this.croppedLive.highlight) {
+        const startX = this.croppedLive.highlight.startX;
+        const startY = this.croppedLive.highlight.startY;
+        this.croppedLive.highlight.style = {
+          position: 'absolute',
+          left: `${Math.min(x, startX)}px`,
+          top: `${Math.min(y, startY)}px`,
+          width: `${Math.abs(x - startX)}px`,
+          height: `${Math.abs(y - startY)}px`,
+          backgroundColor: 'rgba(255,255,0,0.3)'
+        };
+        return;
+      }
+
+      // Update live underline
+      if (this.croppedLive.underline) {
+        const startX = this.croppedLive.underline.startX;
+        const startY = this.croppedLive.underline.startY;
+        this.croppedLive.underline.style = {
+          position: 'absolute',
+          left: `${Math.min(x, startX)}px`,
+          top: `${startY}px`,
+          width: `${Math.abs(x - startX)}px`,
+          height: '2px',
+          backgroundColor: 'blue'
+        };
+        return;
+      }
+
+      // Extend live trace
+      if (this.croppedLive.trace) {
+        this.croppedLive.trace.points.push({ x, y });
+        return;
+      }
+    },
+
+    cropStageUp(e) {
+      // End panning
+      if (this.isCropPanning) {
+        this.isCropPanning = false;
+        this._cPanStart = null;
+        return;
+      }
+
+      // End angle point dragging
+      if (this.measureModeActive && this.croppedDraggingPoint !== -1) {
+        this.croppedDraggingPoint = -1;
+        this.croppedEditingAnnotationIndex = -1;
+        this.croppedLive.measure = null;
+        return;
+      }
+
+      // For highlights and underlines, don't commit on mouseup anymore
+      // They now use two-click system (commit on second mousedown)
+      
+      // Commit live trace
+      if (this.croppedLive.trace && this.croppedLive.trace.points.length > 1) {
+        this.croppedAnnotations.push({
+          type: 'trace',
+          points: [...this.croppedLive.trace.points],
+          color: this.croppedLive.trace.color,
+          penWidth: this.croppedLive.trace.penWidth
+        });
+        
+        this.croppedLive.trace = null;
+        return;
+      }
+    },
+
+    // ===== CROPPED BANK HANDLERS =====
+    enableCroppedMove() {
+      this.croppedMoveActive = true;
+    },
+
+    disableCroppedMove() {
+      this.croppedMoveActive = false;
+    },
+
+    deleteSelectedCropped() {
+      if (!this.croppedBankSelected.length) return;
+      
+      // Convert selected keys back to indices and remove from croppedAnnotations
+      const indices = this.croppedBankSelected
+        .map(key => {
+          if (typeof key === 'string' && key.startsWith('c')) {
+            const index = parseInt(key.substring(1));
+            return isNaN(index) ? -1 : index;
+          } else {
+            console.warn('Invalid cropped bank key:', key);
+            return -1;
+          }
+        })
+        .filter(index => index >= 0)
+        .sort((a, b) => b - a);
+      
+      indices.forEach(index => {
+        if (index >= 0 && index < this.croppedAnnotations.length) {
+          this.croppedAnnotations.splice(index, 1);
+        }
+      });
+      
+      this.croppedBankSelected = [];
     },
 
     /* ---------- Save to PDF ---------- */
@@ -2312,7 +3398,39 @@ cancelPenSelection() {
 }
 
 .workspace { display: block; height: calc(100vh - 110px); }
-.stage {    position: relative;   background: #f1f1f1; }
+.stage {    
+  position: relative;   
+  background: #f1f1f1;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
+.stage *,
+.stage *::before,
+.stage *::after {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
+.stage *::selection,
+.stage::selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+.stage *::-moz-selection,
+.stage::-moz-selection {
+  background: transparent !important;
+  color: inherit !important;
+}
 .bank { width: 300px; min-width: 300px; border-left: 1px solid #e5e7eb; }
 
 .navigation-bar {
@@ -2371,10 +3489,19 @@ cancelPenSelection() {
 /* === Popups / overlays must always be on top === */
 .length-popup,             /* Horizontal/Vertical selectors */
 .statistics-popup,         /* results tables */
-.stats-panel,              /* the 'Statistics' quick panel */
+.stats-panel {             /* the 'Statistics' quick panel */
+  z-index: calc(var(--z-modal-top) + 500);  /* Always above cropped popup */
+}
+
 .cropped-popup,            /* cropped image dialog */
 .blurred-background {
-  z-index: 5000;           /* top-most */
+  z-index: var(--z-modal);           /* modal level */
+}
+
+/* When cropped popup is active, other popups should be above it */
+.length-popup,
+.statistics-popup {
+  z-index: 999999 !important;  /* NUCLEAR OPTION - MUST BE ON TOP */
 }
 
 /* Just to be safe, their internal cards sit above their own backdrop */
@@ -2414,22 +3541,148 @@ cancelPenSelection() {
 
 .cropping-rectangle { position: absolute; border: 2px dashed #007bff; background-color: rgba(0, 123, 255, 0.2); pointer-events: none; z-index: 100; }
 
-.blurred-background { position: fixed; top: 0; left: 0; width: 100%; height: 100%; backdrop-filter: blur(8px); background-color: rgba(0,0,0,0.3); z-index: 999; }
-.cropped-popup { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #fff; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 1000; padding: 20px; text-align: center; }
+.blurred-background { position: fixed; top: 0; left: 0; width: 100%; height: 100%; backdrop-filter: blur(8px); background-color: rgba(0,0,0,0.3); z-index: var(--z-modal); }
+.cropped-popup {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+  z-index: var(--z-modal-top);
+  padding: 20px;
+  text-align: center;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+.cropped-popup * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+/* Global selection prevention when cropped popup is active */
+body.cropped-popup-active * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+body.cropped-popup-active *::selection {
+  background: transparent !important;
+}
+
+body.cropped-popup-active *::-moz-selection {
+  background: transparent !important;
+}
 .cropped-popup-content img { max-width: 100%; max-height: 300px; margin-bottom: 20px; }
 .cropped-popup-content button { margin-top: 10px; padding: 8px 16px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
 .cropped-popup-content button:hover { background-color: #0056b3; }
 
-.comment-container { position: absolute; display: flex; flex-direction: column; align-items: center; cursor: grab; z-index: 1; }
-.comment-container:active { cursor: grabbing; }
-.comment-icon { font-size: 24px; background-color: #ffecb3; border-radius: 50%; width: 30px; height: 30px; display: flex; justify-content: center; align-items: center; }
-.comment-bubble { margin-left: 8px; padding: 8px; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0px 2px 4px rgba(0,0,0,0.1); position: relative; }
-.comment-bubble::after { content: ""; position: absolute; top: 50%; left: -8px; width: 0; height: 0; border: 8px solid transparent; border-right-color: #fff; transform: translateY(-50%); }
-.comment-content { font-size: 14px; color: #333; }
-.comment-input-container { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #fff; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); padding: 10px; width: 300px; z-index: 1000; }
-.comment-input-box { width: 100%; height: 60px; border: 1px solid #ccc; border-radius: 5px; padding: 8px; font-size: 14px; margin-bottom: 8px; resize: none; }
-.btn-save-comment, .btn-cancel-comment { background-color: #007bff; color: white; border: none; border-radius: 5px; padding: 5px 10px; font-size: 14px; cursor: pointer; }
-.btn-cancel-comment { background-color: #6c757d; margin-left: 10px; }
+/* Comment card */
+.comment-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: grab;
+  user-select: none;
+}
+.comment-card:active { cursor: grabbing; }
+
+.comment-pin {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #e7f0ff;       /* light blue */
+  color: #2b6fde;            /* blue icon */
+  border: 1px solid #c9d8ff;
+  font-size: 14px;
+  flex: 0 0 auto;
+}
+
+.comment-bubble {
+  flex: 1 1 auto;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+  padding: 8px 10px;
+}
+.comment-text {
+  font-size: 13px;
+  color: #111827;
+  line-height: 1.35;
+}
+
+/* Composer */
+.comment-composer {
+  width: 260px;
+  background: #ffffff;
+  border: 1px solid #c9d8ff;
+  border-radius: 12px;
+  box-shadow: 0 10px 24px rgba(43, 111, 222, 0.18);
+  padding: 10px;
+}
+
+.composer-textarea {
+  width: 100%;
+  min-height: 86px;
+  border: 1px solid #dbe4ff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  resize: vertical;
+  outline: none;
+}
+.composer-textarea:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+}
+
+.composer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.btn-blue {
+  border: 1px solid #2563eb;
+  background: #3b82f6;
+  color: #fff;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: filter .15s, transform .02s;
+}
+.btn-blue:hover { filter: brightness(0.95); }
+.btn-blue:active { transform: translateY(1px); }
+
+.btn-gray {
+  border: 1px solid #c7c9d1;
+  background: #eef0f5;
+  color: #374151;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: filter .15s, transform .02s;
+}
+.btn-gray:hover { filter: brightness(0.97); }
+.btn-gray:active { transform: translateY(1px); }
 
 .clear-dropdown {
   position: absolute; top: 100%; left: 0; background: white; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); z-index: 1100; min-width: 160px;
@@ -2440,7 +3693,7 @@ cancelPenSelection() {
 .length-popup {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
   display: flex; justify-content: center; align-items: center;
-  background-color: rgba(0,0,0,0.5); z-index: 1200;
+  background-color: rgba(0,0,0,0.5); z-index: 999999 !important;
 }
 .length-popup-content {
   background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); text-align: center; width: 520px; max-width: calc(100% - 24px);
@@ -2552,7 +3805,7 @@ cancelPenSelection() {
 
 .statistics-popup {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,0.5); z-index: 1200;
+  display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,0.5); z-index: 999999 !important;
 }
 .statistics-popup-content {
   background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
@@ -2562,4 +3815,532 @@ cancelPenSelection() {
 .statistics-popup-content th, .statistics-popup-content td { border: 1px solid #ddd; padding: 8px; text-align: center; }
 .statistics-popup-content th { background: #f2f2f2; }
 .statistics-popup-content h4 { margin-top: 12px; margin-bottom: 8px; }
+
+/* Stage is a fixed viewport for the page; UI overlays sit on top via z-index */
+.pdf-viewer.stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  /* no flex centering — the anchor will center itself abs pos */
+}
+
+/* New absolute centered container that gets transformed */
+.zoom-anchor {
+  position: absolute; /* set in JS too */
+  z-index: 100;       /* keep content behind bank/buttons/popups */
+  will-change: transform;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+.zoom-anchor *,
+.zoom-anchor *::before,
+.zoom-anchor *::after {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  -webkit-highlight: none !important;
+}
+
+.zoom-anchor *::selection,
+.zoom-anchor::selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+.zoom-anchor *::-moz-selection,
+.zoom-anchor::-moz-selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+/* NUCLEAR OPTION: Background div instead of img element */
+.image-viewer-background {
+  width: 100% !important;
+  height: 100% !important;
+  display: block !important;
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  z-index: -100 !important;
+  
+  /* Complete interaction prevention */
+  pointer-events: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-user-drag: none !important;
+  -khtml-user-drag: none !important;
+  -moz-user-drag: none !important;
+  -o-user-drag: none !important;
+  outline: none !important;
+  border: none !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  -webkit-highlight: none !important;
+  -moz-user-focus: ignore !important;
+  background-color: transparent !important;
+  
+  /* Prevent any text/content selection */
+  -webkit-user-modify: read-only !important;
+  -moz-user-modify: read-only !important;
+}
+
+.image-viewer-background::selection,
+.image-viewer-background *::selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+.image-viewer-background::-moz-selection,
+.image-viewer-background *::-moz-selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+.calculation-image {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  user-select: none !important;
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  z-index: -1 !important;
+}
+
+.hidden-image-loader {
+  display: none !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  top: -9999px !important;
+  left: -9999px !important;
+  pointer-events: none !important;
+  user-select: none !important;
+}
+
+/* Ensure drawing layer sits above the image but below buttons/panels */
+.drawing-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 120; /* slightly above anchor content if needed */
+}
+
+/* Keep bank and buttons well above page content */
+.bank-panel { z-index: 1500; }
+
+.image-viewer {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  display: block !important;
+  
+  /* NUCLEAR OPTION: Complete interaction prevention */
+  pointer-events: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-user-drag: none !important;
+  -khtml-user-drag: none !important;
+  -moz-user-drag: none !important;
+  -o-user-drag: none !important;
+  outline: none !important;
+  border: none !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  -webkit-highlight: none !important;
+  -moz-user-focus: ignore !important;
+  position: relative !important;
+  z-index: -10 !important;
+  background: transparent !important;
+  
+  /* Completely invisible to mouse interactions */
+  visibility: hidden !important;
+}
+
+/* Make the image visible but completely unselectable */
+.zoom-anchor .image-viewer {
+  visibility: visible !important;
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: -100 !important;
+  pointer-events: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+}
+
+.image-viewer::selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+.image-viewer::-moz-selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+.page-loading {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+/* Popups must be the absolute top-most layer */
+.length-popup,
+.stats-panel,
+.statistics-popup,
+.cropped-popup {
+  z-index: 2000;
+}
+
+/* Enhanced Cropped Popup Styles */
+.cropped-popup {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(0,0,0,.2);
+  z-index: 2000;
+  width: min(1100px, calc(100vw - 48px));
+  max-height: calc(100vh - 120px);
+  overflow: hidden;
+}
+
+.cropped-popup-content {
+  padding: 16px 18px 12px;
+}
+
+.crop-header {
+  display:flex; align-items:center; justify-content:space-between;
+}
+.crop-header h3 { margin: 0; font-size: 22px; font-weight: 700; }
+.crop-actions { display:flex; gap:8px; }
+
+.crop-stage {
+  position: relative;
+  height: 520px;              /* feel free to tune */
+  background: #f7f9ff;
+  border: 1px solid #e6ecff;
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 12px 0 10px;
+}
+
+.crop-anchor {
+  position: absolute;
+  will-change: transform;
+  z-index: 100;
+}
+
+.cropped-image {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
+.zoom-btn {
+  position: absolute;
+  z-index: 1200;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: #3b82f6;
+  color: #fff;
+  font-size: 20px;
+  line-height: 36px;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+.zoom-btn:disabled { opacity:.45; cursor:not-allowed; }
+.zoom-btn:hover { filter: brightness(.95); }
+
+.mini-bank {
+  margin-top: 10px;
+  border-top: 1px dashed #e5e7eb;
+  padding-top: 10px;
+}
+.mini-bank-title {
+  font-weight: 700; font-size: 14px; color: #334155; margin-bottom: 6px;
+}
+.mini-bank-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px,1fr));
+  gap: 6px;
+}
+.mini-bank-item {
+  display:flex; align-items:center; gap:8px;
+  background:#f8fafc; border:1px solid #e5e7eb;
+  padding:6px 8px; border-radius:8px;
+  font-size:12px; color:#0f172a;
+}
+.mini-bank-item .dot {
+  width:10px; height:10px; border-radius:50%;
+}
+
+/* ===== Global modal stacking policy ===== */
+:root {
+  --z-stage: 0;
+  --z-bank: 1500;
+  --z-popover: 3000;        /* tooltips, small menus */
+  --z-modal: 9000;          /* standard dialogs (crop popup) */
+  --z-modal-top: 10000;     /* any popup that must be above all */
+}
+
+/* NUCLEAR OPTION: Force angle/trace popups above everything */
+.length-popup[v-if],
+.statistics-popup[v-if],
+div.length-popup,
+div.statistics-popup,
+.length-popup,
+.statistics-popup {
+  z-index: 999999 !important;
+  position: fixed !important;
+}
+
+/* make sure all generic popups use one of these */
+.stats-panel,
+.cropped-popup {
+  z-index: var(--z-modal);
+}
+
+/* Angle and trace popups MUST be above cropped popup */
+.length-popup,
+.statistics-popup {
+  z-index: 999999 !important;
+}
+
+/* things that should ALWAYS sit above everything */
+.length-popup.topmost,
+.statistics-popup.topmost,
+.stats-panel.topmost {
+  z-index: var(--z-modal-top);
+}
+
+/* bank should never cover popups */
+.bank-panel { z-index: var(--z-bank); }
+
+/* Updated popup styles with new design */
+.cropped-popup {
+  position: fixed; top: 50%; left: 50%;
+  transform: translate(-50%,-50%);
+  width: min(1100px, calc(100vw - 48px));
+  max-height: calc(100vh - 96px);
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(0,0,0,.2);
+  overflow: hidden;
+  z-index: var(--z-modal);
+}
+.cropped-popup-content { padding: 14px 16px 12px; }
+
+.crop-header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0 8px;
+}
+.left-spacer { min-height: 1px; }
+
+.zoom-cluster {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #eef3ff; border: 1px solid #d8e1ff; border-radius: 999px;
+  padding: 6px 8px;
+}
+.zoom-pill {
+  min-width: 36px; height: 32px; border-radius: 8px; border: 1px solid #2f60e3;
+  background: #3f6eea; color: #fff; font-weight: 700; cursor: pointer;
+}
+.zoom-pill:disabled { opacity: .45; cursor: not-allowed; }
+.zoom-readout { font-size: 12px; color: #305; padding-left: 6px; }
+
+.crop-actions { display: inline-flex; gap: 8px; }
+
+/* Mini Toolbar for cropped popup */
+.crop-toolbar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: #f8faff;
+  border-top: 1px solid #e1e7f0;
+  border-bottom: 1px solid #e1e7f0;
+  margin-top: 8px;
+}
+
+.crop-tool {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  color: #555;
+  min-width: 60px;
+}
+
+.crop-tool:hover {
+  background: #e8f0ff;
+  color: #2f60e3;
+}
+
+.crop-tool.active {
+  background: #3f6eea;
+  color: #fff;
+}
+
+.crop-tool i {
+  font-size: 18px;
+}
+
+.crop-tool span {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.crop-tool-divider {
+  width: 1px;
+  height: 32px;
+  background: #d0d7e0;
+}
+
+.crop-stage {
+  position: relative;
+  height: 520px;
+  margin-top: 8px;
+  background: #f7f9ff;
+  border: 1px solid #e6ecff;
+  border-radius: 12px;
+  overflow: hidden;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  -webkit-highlight: none !important;
+}
+
+.crop-stage *,
+.crop-stage *::before,
+.crop-stage *::after {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  -webkit-highlight: none !important;
+}
+
+.crop-stage *::selection,
+.crop-stage::selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+.crop-stage *::-moz-selection,
+.crop-stage::-moz-selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+.crop-anchor { 
+  position: absolute; 
+  will-change: transform; 
+  z-index: 100; 
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+.cropped-image { 
+  display: block !important; 
+  width: 100% !important; 
+  height: 100% !important; 
+  object-fit: contain !important; 
+  pointer-events: none !important; 
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-user-drag: none !important;
+  -khtml-user-drag: none !important;
+  -moz-user-drag: none !important;
+  -o-user-drag: none !important;
+  outline: none !important;
+  border: none !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  -webkit-highlight: none !important;
+  -moz-user-focus: ignore !important;
+  position: absolute !important;
+  z-index: -10 !important;
+  background: transparent !important;
+}
+
+.cropped-image::selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+.cropped-image::-moz-selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+/* Ensure overlay captures all events */
+.image-overlay {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+.mini-bank {
+  margin-top: 10px;
+  border-top: 1px dashed #e5e7eb;
+  padding-top: 8px;
+}
+
+/* keep banks below modals */
+.bank-panel, .mini-bank { z-index: var(--z-bank); }
 </style>
