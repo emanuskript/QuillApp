@@ -3,7 +3,15 @@
   <aside class="bank">
     <header class="bank__header">
       <span class="bank__title">Annotations — Page {{ page + 1 }}</span>
-      <div class="zoom-indicator">{{ Math.round(zoomLevel * 100) }}%</div>
+      <div class="header-controls">
+        <div class="zoom-indicator">{{ Math.round(zoomLevel * 100) }}%</div>
+        <div class="unit-toggle" @click="toggleUnits" :title="`Switch to ${showInCm ? 'pixels' : 'centimeters'}`">
+          <div class="toggle-switch" :class="{ active: showInCm }">
+            <div class="toggle-slider"></div>
+          </div>
+          <span class="unit-label">{{ showInCm ? 'cm' : 'px' }}</span>
+        </div>
+      </div>
     </header>
 
     <!-- Items -->
@@ -69,8 +77,10 @@ export default {
     multiSelect: { type: Boolean, default: true },
     moveActive: { type: Boolean, default: false },
     zoomLevel: { type: Number, default: 1 },
+    showInCm: { type: Boolean, default: false },
+    pixelsPerCm: { type: Number, default: 37.8 }, // Approximate conversion: 96 DPI = 37.8 pixels per cm
   },
-  emits: ["update:selected", "toggle-multi", "request-move", "cancel-move", "request-delete"],
+  emits: ["update:selected", "toggle-multi", "request-move", "cancel-move", "request-delete", "toggle-units"],
   methods: {
     toggle(key) {
       console.log('Toggle called with key:', key, 'Current selection:', this.selectedKeys);
@@ -94,6 +104,9 @@ export default {
       return String(cat)
         .replace(/_/g, " ")
         .replace(/(^|\s)\S/g, (m) => m.toUpperCase());
+    },
+    toggleUnits() {
+      this.$emit("toggle-units");
     },
   },
 };
@@ -143,6 +156,12 @@ export default {
 }
 .bank__title{ font-weight: 600; }
 
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .zoom-indicator {
   background: #3b82f6;
   color: white;
@@ -150,6 +169,50 @@ export default {
   border-radius: 4px;
   font-size: 11px;
   font-weight: 600;
+}
+
+.unit-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle-switch {
+  position: relative;
+  width: 32px;
+  height: 16px;
+  background: #ccc;
+  border-radius: 16px;
+  transition: background-color 0.3s ease;
+}
+
+.toggle-switch.active {
+  background: #3b82f6;
+}
+
+.toggle-slider {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.3s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-switch.active .toggle-slider {
+  transform: translateX(16px);
+}
+
+.unit-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--panel-text);
+  min-width: 16px;
 }
 
 /* list */

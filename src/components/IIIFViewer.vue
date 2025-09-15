@@ -277,10 +277,10 @@
           >
             {{ currentSquare.label }}:
             {{
-              isHorizontalLabel(currentSquare.label)
+              formatMeasurement(isHorizontalLabel(currentSquare.label)
                 ? currentSquare.height
-                : currentSquare.width
-            }}px
+                : currentSquare.width)
+            }}
           </div>
         </div>
 
@@ -315,10 +315,10 @@
           >
             {{ measurement.label }}:
             {{
-              isHorizontalLabel(measurement.label)
+              formatMeasurement(isHorizontalLabel(measurement.label)
                 ? measurement.height
-                : measurement.width
-            }}px
+                : measurement.width)
+            }}
           </div>
         </div>
 
@@ -427,11 +427,14 @@
      :multiSelect="bankMultiSelect"
      :moveActive="moveModeActive"
      :zoomLevel="zoomLevel"
+     :showInCm="showMeasurementsInCm"
+     :pixelsPerCm="pixelsPerCm"
      @update:selected="(keys) => bankSelectedKeys = keys"
      @toggle-multi="bankMultiSelect = !bankMultiSelect"
      @request-move="enableMoveMode"
      @cancel-move="disableMoveMode"
      @request-delete="deleteSelectedFromBank"
+     @toggle-units="toggleMeasurementUnits"
    />
     </div>
 
@@ -916,11 +919,14 @@
           :selectedKeys="croppedBankSelected"
           :multiSelect="croppedBankMulti"
           :moveActive="croppedMoveActive"
+          :showInCm="showMeasurementsInCm"
+          :pixelsPerCm="pixelsPerCm"
           @update:selected="(keys)=>croppedBankSelected = keys"
           @toggle-multi="croppedBankMulti = !croppedBankMulti"
           @request-move="enableCroppedMove"
           @cancel-move="disableCroppedMove"
           @request-delete="deleteSelectedCropped"
+          @toggle-units="toggleMeasurementUnits"
         />
       </div>
     </div>
@@ -967,6 +973,10 @@ export default {
       isMeasuring: false, // length-bands creation
       croppingStarted: false,
       cropButtonClicked: false,
+
+      // Measurement units
+      showMeasurementsInCm: false,
+      pixelsPerCm: 37.8, // Approximate conversion: 96 DPI = 37.8 pixels per cm
 
       // Bands sticky-mode
       activeBandGroup: null,   // 'horizontal' | 'vertical' | null
@@ -1321,7 +1331,7 @@ export default {
             key: `a:${i}`,
             category: "highlight",
             title: "Highlight",
-            subtitle: `${Math.round(a.width)}×${Math.round(a.height)} px`,
+            subtitle: this.formatDimensions(a.width, a.height),
             color: "rgba(255, 255, 0, 0.8)",
           });
           return;
@@ -1332,7 +1342,7 @@ export default {
             key: `a:${i}`,
             category: "underline",
             title: "Underline",
-            subtitle: `${Math.round(a.width)} px`,
+            subtitle: this.formatMeasurement(a.width),
             color: "red",
           });
           return;
@@ -1346,7 +1356,7 @@ export default {
           key: `l:${m.id}`,
           category: "length",
           title: this.camelToTitle(m.label || "Length"),
-          subtitle: `${Math.round(m.width)}×${Math.round(m.height)} px`,
+          subtitle: this.formatDimensions(m.width, m.height),
           color: m.color || this.measurementColors[m.label] || "#6ea8fe",
         });
       });
@@ -2571,6 +2581,31 @@ cancelPenSelection() {
       // Clear selection after successful deletion
       this.bankSelectedKeys = [];
       this.showToolMessage(`Deleted ${annIdxs.length + cmtIdxs.length + lengthIds.length} items.`);
+    },
+
+    /* ---------- Measurement Units Toggle ---------- */
+    toggleMeasurementUnits() {
+      this.showMeasurementsInCm = !this.showMeasurementsInCm;
+      this.showToolMessage(`Measurements now shown in ${this.showMeasurementsInCm ? 'centimeters' : 'pixels'}.`);
+    },
+
+    formatMeasurement(pixels) {
+      if (this.showMeasurementsInCm) {
+        const cm = pixels / this.pixelsPerCm;
+        return `${cm.toFixed(1)} cm`;
+      } else {
+        return `${Math.round(pixels)} px`;
+      }
+    },
+
+    formatDimensions(width, height) {
+      if (this.showMeasurementsInCm) {
+        const widthCm = width / this.pixelsPerCm;
+        const heightCm = height / this.pixelsPerCm;
+        return `${widthCm.toFixed(1)}×${heightCm.toFixed(1)} cm`;
+      } else {
+        return `${Math.round(width)}×${Math.round(height)} px`;
+      }
     },
 
     /* ---------- Image & crop ---------- */
