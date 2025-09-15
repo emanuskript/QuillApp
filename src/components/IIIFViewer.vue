@@ -436,6 +436,11 @@
      @request-delete="deleteSelectedFromBank"
      @toggle-units="toggleMeasurementUnits"
    />
+
+   <!-- Floating Scribe Detection Button -->
+   <div class="floating-scribe-button" @click="openScribeDetection">
+     <i class="fa-solid fa-user-pen"></i>
+   </div>
     </div>
 
     <!-- Angle Label Picker Popup -->
@@ -930,6 +935,14 @@
         />
       </div>
     </div>
+
+    <!-- Scribe Detection Popup -->
+    <ScribeDetectionPopup
+      ref="scribeDetectionPopup"
+      :currentPage="currentPage"
+      :totalPages="totalPages"
+      :currentPageImage="currentImage"
+    />
   </div>
 </template>
 
@@ -939,10 +952,11 @@ import { PDFDocument } from "pdf-lib";
 import html2canvas from "html2canvas";
 import AnnotationsBank from "@/components/viewer/AnnotationsBank.vue";
 import NavigationBar from "@/components/viewer/NavigationBar.vue";
+import ScribeDetectionPopup from "@/components/popups/ScribeDetectionPopup.vue";
 
 export default {
   name: "IIIFViewer",
-  components: { AnnotationsBank, NavigationBar },
+  components: { AnnotationsBank, NavigationBar, ScribeDetectionPopup },
   props: {
     source: { type: String, required: true },
   },
@@ -1475,6 +1489,9 @@ export default {
     }
   },
   mounted() {
+    // Force close any cropped popup on mount
+    this.croppedImage = null;
+    
     this._onLabelDragMove = (e) => {
       if (this.draggedLabelIndex !== null) {
         let measurement = null;
@@ -1522,6 +1539,9 @@ export default {
   },
 
   methods: {
+    openScribeDetection() {
+      this.$refs.scribeDetectionPopup.openPopup();
+    },
     goHome() {
       const ok = window.confirm(
         "Return to the home screen? Any unsaved work on this page will be lost."
@@ -4437,4 +4457,57 @@ div.statistics-popup,
 
 /* keep banks below modals */
 .bank-panel, .mini-bank { z-index: var(--z-bank); }
+
+/* Floating Scribe Detection Button */
+.floating-scribe-button {
+  position: fixed;
+  right: 30px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 60px;
+  height: 60px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+  transition: all 0.3s ease;
+  z-index: 1000;
+  border: 3px solid white;
+}
+
+.floating-scribe-button:hover {
+  transform: translateY(-50%) scale(1.1);
+  box-shadow: 0 12px 35px rgba(102, 126, 234, 0.4);
+}
+
+.floating-scribe-button:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
+.floating-scribe-button i {
+  color: white;
+  font-size: 1.5em;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+}
+
+.floating-scribe-button::before {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: inherit;
+  z-index: -1;
+  opacity: 0;
+  transform: scale(1);
+  transition: all 0.3s ease;
+}
+
+.floating-scribe-button:hover::before {
+  opacity: 0.3;
+  transform: scale(1.2);
+}
 </style>
