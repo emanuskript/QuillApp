@@ -4165,7 +4165,7 @@ div.statistics-popup,
 
 .crop-header {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 10px;
   padding: 2px 0 8px;
@@ -4173,18 +4173,77 @@ div.statistics-popup,
 .left-spacer { min-height: 1px; }
 
 .zoom-cluster {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: #eef3ff; border: 1px solid #d8e1ff; border-radius: 999px;
-  padding: 6px 8px;
+  display: flex; 
+  align-items: center; 
+  justify-content: space-evenly;
+  gap: 12px;
+  background: linear-gradient(135deg, #f8faff 0%, #eef3ff 100%); 
+  border: 1px solid #d8e1ff; 
+  border-radius: 28px;
+  padding: 12px 20px;
+  box-shadow: 0 2px 8px rgba(47, 96, 227, 0.1);
+  justify-self: center;
+  min-height: 52px;
+  min-width: 180px;
+  margin-bottom: 20px;
 }
-.zoom-pill {
-  min-width: 36px; height: 32px; border-radius: 8px; border: 1px solid #2f60e3;
-  background: #3f6eea; color: #fff; font-weight: 700; cursor: pointer;
-}
-.zoom-pill:disabled { opacity: .45; cursor: not-allowed; }
-.zoom-readout { font-size: 12px; color: #305; padding-left: 6px; }
 
-.crop-actions { display: inline-flex; gap: 8px; }
+.crop-actions { 
+  display: inline-flex; 
+  gap: 8px; 
+  justify-self: end;
+}
+
+.zoom-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px; 
+  width: 36px;
+  height: 36px; 
+  border-radius: 10px; 
+  border: 10px solid #2f60e3;
+  background: linear-gradient(135deg, #4a7aed 0%, #3f6eea 100%); 
+  color: #fff; 
+  font-weight: 700; 
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(47, 96, 227, 0.2);
+  flex-shrink: 10;
+  margin-top: -30px;
+}
+.zoom-pill:hover:not(:disabled) { 
+  background: linear-gradient(135deg, #2f60e3 0%, #2856d6 100%); 
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(47, 96, 227, 0.3);
+}
+.zoom-pill:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(47, 96, 227, 0.3);
+}
+.zoom-pill:disabled { 
+  opacity: .45; 
+  cursor: not-allowed; 
+  transform: none;
+  box-shadow: none;
+}
+.zoom-readout { 
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px; 
+  color: #2856d6; 
+  font-weight: 600;
+  min-width: 60px;
+  height: 36px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 18px;
+  margin: 0;
+  flex-shrink: 0;
+  border: 1px solid rgba(216, 225, 255, 0.6);
+}
 
 /* Mini Toolbar for cropped popup */
 .crop-toolbar {

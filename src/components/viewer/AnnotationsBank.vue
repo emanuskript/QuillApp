@@ -73,6 +73,7 @@ export default {
   emits: ["update:selected", "toggle-multi", "request-move", "cancel-move", "request-delete"],
   methods: {
     toggle(key) {
+      console.log('Toggle called with key:', key, 'Current selection:', this.selectedKeys);
       const set = new Set(this.selectedKeys);
       if (set.has(key)) {
         set.delete(key);
@@ -86,6 +87,7 @@ export default {
         }
       }
       const newSelection = Array.from(set);
+      console.log('Emitting new selection:', newSelection);
       this.$emit("update:selected", newSelection);
     },
     pretty(cat) {
