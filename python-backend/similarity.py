@@ -16,6 +16,11 @@ except Exception:
 from feature_extractor import (
     line_embedding, lbp_hist, hog_hist, central_band_coords, color_stats_hv
 )
+try:
+    from sklearn.cluster import KMeans  # optional fallback
+    _HAS_SK = True
+except Exception:
+    _HAS_SK = False
 
 def _cosine_consecutive(X: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     if X.shape[0] < 2:
@@ -180,11 +185,11 @@ def _sort_by_num(paths: List[str]) -> List[str]:
 class ImageProcessor:
     def __init__(self,
                  metric="cosine",
-                 smooth_win=3,
+                 smooth_win=5,
                  z_method="mad",
                  z_thresh: Optional[float]=None,
                  min_gap=2,
-                 min_run=3,
+                 min_run=2,
                  resize_height=128,
                  central_band_frac=0.6,
                  central_band_pad=2,
@@ -235,13 +240,18 @@ class ImageProcessor:
         }
 
     def detect_with_reasons(self, line_paths: List[str]) -> Dict[str, object]:
-        if not line_paths: return {"changes": [], "z": [], "dist": []}
+        if not line_paths:
+            return {"changes": [], "z": [], "dist": []}
+
         # read + embed
         paths = _sort_by_num(line_paths)
-        imgs, embs, diags = [], [], []
+        imgs: List[np.ndarray] = []
+        embs: List[np.ndarray] = []
+        diags: List[Dict[str, float]] = []
         for p in paths:
             img = cv2.imread(p, cv2.IMREAD_COLOR)
-            if img is None: continue
+            if img is None:
+                continue
             imgs.append(img)
             embs.append(line_embedding(
                 img,
@@ -253,24 +263,74 @@ class ImageProcessor:
             ))
             diags.append(self._diagnostics(img))
 
-        if len(embs) < 2: return {"changes": [], "z": [], "dist": []}
-        X = np.vstack(embs).astype(np.float32)
-        # detect
-        change_idxs, dist, z = detect_change_indices(
-            X, metric=self.metric, smooth_win=self.smooth_win,
-            z_method=self.z_method, z_thresh=self.z_thresh, min_gap=self.min_gap
-        )
+        if len(embs) < 2:
+            return {"changes": [], "z": [], "dist": []}
 
-        changes = []
-        for i in change_idxs:
+        X = np.vstack(embs).astype(np.float32)
+
+        # detect with adaptive threshold if not provided
+        change_idxs: List[int] = []
+        dist = np.array([])
+        z = np.array([])
+        if self.z_thresh is None:
+            # Try descending thresholds until at least one change is found
+            for t in (2.5, 2.2, 2.0, 1.8, 1.6, 1.4):
+                peaks, dist_tmp, z_tmp = detect_change_indices(
+                    X, metric=self.metric, smooth_win=self.smooth_win,
+                    z_method=self.z_method, z_thresh=t, min_gap=self.min_gap
+                )
+                if len(peaks) >= 1:
+                    change_idxs = peaks
+                    dist, z = dist_tmp, z_tmp
+                    break
+            # If still none, keep last dist/z and leave change_idxs empty
+            if z.size == 0 or dist.size == 0:
+                _, dist, z = detect_change_indices(
+                    X, metric=self.metric, smooth_win=self.smooth_win,
+                    z_method=self.z_method, z_thresh=2.0, min_gap=self.min_gap
+                )
+        else:
+            change_idxs, dist, z = detect_change_indices(
+                X, metric=self.metric, smooth_win=self.smooth_win,
+                z_method=self.z_method, z_thresh=self.z_thresh, min_gap=self.min_gap
+            )
+
+        # Fallback: cluster-based boundaries when no peaks
+        if not change_idxs and _HAS_SK and X.shape[0] >= 4:
+            try:
+                km = KMeans(n_clusters=2, n_init=10, random_state=0)
+                labels = km.fit_predict(X)
+                raw = [i for i in range(len(labels) - 1) if labels[i] != labels[i + 1]]
+                # Enforce min_run (minimum lines between boundaries)
+                filtered: List[int] = []
+                last = -999
+                for i in raw:
+                    if i - last >= self.min_run:
+                        filtered.append(i)
+                        last = i
+                change_idxs = filtered
+            except Exception:
+                change_idxs = []
+
+        # Enforce min_gap across any change_idxs we have
+        final_changes: List[int] = []
+        for i in sorted(set(change_idxs)):
+            if not final_changes or (i - final_changes[-1]) >= self.min_gap:
+                final_changes.append(i)
+
+        # Build change objects with reasons and confidences
+        changes: List[Dict[str, object]] = []
+        for i in final_changes:
             if 0 <= i < len(imgs) - 1:
-                # confidence from z: squash with sigmoid around z=2.0
-                conf = _sigmoid(float(z[i] - 2.0))  # ~0.88 at z=2, ~0.95 at z=3
-                # explanations
-                a, b = diags[i], diags[i+1]
-                # texture dissimilarity via chi² on LBP
+                zi = float(z[i]) if isinstance(z, np.ndarray) and z.size > i else 2.0
+                conf = _sigmoid(zi - 2.0)
+                a, b = diags[i], diags[i + 1]
                 a["lbp_chi2"] = _chi2(a["lbp"], b["lbp"])
                 reason = _reason_from_diffs(a, b)
                 changes.append({"index": int(i), "confidence": float(conf), "reason": reason})
 
-        return {"changes": changes, "z": z.tolist(), "dist": dist.tolist()}
+        return {
+            "changes": changes,
+            "z": z.tolist() if isinstance(z, np.ndarray) else [],
+            "dist": dist.tolist() if isinstance(dist, np.ndarray) else []
+        }

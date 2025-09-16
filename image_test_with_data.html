@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Display Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .test-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .image-test {
+            border: 2px solid #ccc;
+            padding: 10px;
+            margin: 10px 0;
+            background: #fafafa;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+        }
+        .failure {
+            background-color: #ffebee;
+            border: 2px solid #f44336;
+            color: #d32f2f;
+        }
+        .success {
+            background-color: #e8f5e8;
+            border: 2px solid #4caf50;
+            color: #2e7d32;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 Image Display Test - Debugging Grey Rectangle Issue</h1>
+    
+    <div class="test-container">
+        <h2>Test 1: Direct Base64 Image</h2>
+        <p>This should show a white rectangle with red border and black text:</p>
+        <div class="image-test">
+            <img src="data:image/png;base64,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" alt="Test Image" style="display: block; margin: 10px 0;">
+        </div>
+    </div>
+
+    <div class="test-container">
+        <h2>Test 2: Dynamic Image Creation</h2>
+        <p>This will create the same image dynamically via JavaScript:</p>
+        <div class="image-test" id="dynamic-container">
+            <p>Loading...</p>
+        </div>
+    </div>
+
+    <div class="test-container">
+        <h2>Test 3: Error Simulation</h2>
+        <p>Testing what happens with invalid base64:</p>
+        <div class="image-test">
+            <img src="data:image/png;base64,invalid" alt="Invalid Image" style="display: block; margin: 10px 0;" 
+                 onerror="this.parentElement.innerHTML='<div class=\"failure\">❌ Invalid base64 detected</div>'">
+        </div>
+    </div>
+
+    <script>
+        // Test dynamic image creation (similar to Vue.js approach)
+        const testBase64 = "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";
+        
+        setTimeout(() => {
+            const container = document.getElementById('dynamic-container');
+            
+            // Clear loading message
+            container.innerHTML = '';
+            
+            // Create image element
+            const img = document.createElement('img');
+            img.src = `data:image/png;base64,${testBase64}`;
+            img.alt = 'Dynamic Test Image';
+            img.style.display = 'block';
+            img.style.margin = '10px 0';
+            img.style.border = '1px solid #ddd';
+            
+            // Add error handler
+            img.onerror = function() {
+                container.innerHTML = '<div class="failure">❌ Dynamic image failed to load</div>';
+            };
+            
+            // Add success handler
+            img.onload = function() {
+                console.log('✅ Dynamic image loaded successfully');
+                const successDiv = document.createElement('div');
+                successDiv.className = 'success';
+                successDiv.textContent = '✅ Dynamic image loaded successfully';
+                container.appendChild(successDiv);
+            };
+            
+            container.appendChild(img);
+        }, 1000);
+
+        // Test if we can detect image load failures
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🔍 Testing image display capabilities...');
+            console.log('Base64 length:', testBase64.length);
+            console.log('Base64 prefix:', testBase64.substring(0, 50));
+        });
+    </script>
+</body>
+</html>

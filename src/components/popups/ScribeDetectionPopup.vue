@@ -26,6 +26,7 @@
               :src="currentPageImage" 
               alt="Manuscript page"
               class="manuscript-image"
+              ref="manuscriptImage"
               @load="onImageLoad"
             >
             <div v-else class="image-placeholder">
@@ -87,17 +88,28 @@
                   class="scribe-item secondary"
                   :class="{ 'highlighted': highlightedScribe === change.scribe }"
                 >
-                  <!-- Line Screenshot -->
-                  <div class="line-screenshot-container">
-                    <canvas 
-                      :ref="`lineCanvas${index}`"
-                      class="line-screenshot"
-                      width="400"
-                      height="60"
-                    ></canvas>
-                    <div class="screenshot-overlay">
-                      <span class="line-range">Lines {{ change.start_line }}-{{ change.end_line }}</span>
+                  <!-- Scribe Preview Screenshots -->
+                  <div class="scribe-previews" v-if="change.samples && change.samples.length">
+                    <img
+                      v-for="(src, i) in change.samples.slice(0, 2)"
+                      :key="i"
+                      :src="`${backendBase}${src}`"
+                      :alt="`${change.scribe} sample ${i + 1}`"
+                      class="scribe-shot"
+                      loading="lazy"
+                      decoding="async"
+                      @error="handleImageError"
+                      @load="handleImageLoad"
+                    />
+                  </div>
+                  
+                  <!-- Neat Line Crops from Backend Segmentation -->
+                  <div class="line-previews" v-if="getLineScreensForChange(change).length">
+                    <div class="line-shot" v-for="(ln, li) in getLineScreensForChange(change)" :key="`ln-${li}`">
+                      <img :src="ln.src" :alt="`Line ${ln.lineNumber}`" loading="lazy" decoding="async" />
+                      <span class="badge">Line {{ ln.lineNumber }}</span>
                     </div>
+                    <div class="screenshot-overlay"><span class="line-range">Lines {{ change.start_line }}-{{ change.end_line }}</span></div>
                   </div>
                   
                   <div class="scribe-header">
@@ -176,21 +188,26 @@ export default {
     results: {
       handler(newResults) {
         if (newResults && newResults.scribe_changes) {
-          // Add a small delay to ensure DOM is fully rendered
-          setTimeout(() => {
-            this.$nextTick(() => {
-              // Capture screenshots for each scribe change
-              newResults.scribe_changes.forEach((change, index) => {
-                this.captureLineScreenshot(change, index)
-              })
-            })
-          }, 100)
+          console.log('Analysis results received:', {
+            scribe_changes: newResults.scribe_changes?.length || 0,
+            line_screenshots: newResults.line_screenshots?.length || 0,
+            total_lines: newResults.total_lines
+          })
+          
+          // Images are bound directly in the template now using backend crops.
         }
       },
       immediate: true
     }
   },
   computed: {
+    backendBase() {
+      try {
+        return (process && process.env && process.env.VUE_APP_BACKEND_URL) || 'http://localhost:5001'
+      } catch (e) {
+        return 'http://localhost:5001'
+      }
+    },
     hasResults() {
       return this.results && (this.results.primary_scribe || (this.results.scribe_changes && this.results.scribe_changes.length > 0))
     }
@@ -220,152 +237,32 @@ export default {
       this.highlightedScribe = scribeName
     },
     
-    captureLineScreenshot(change, index) {
-      // Use a longer timeout to ensure everything is rendered
-      setTimeout(() => {
-        this.$nextTick(() => {
-          const canvas = this.$refs[`lineCanvas${index}`]
-          if (!canvas || !canvas[0]) {
-            console.warn(`Canvas ref not found for index ${index}`)
-            return
-          }
-          
-          const ctx = canvas[0].getContext('2d')
-          const manuscriptImg = this.$refs.manuscriptImage
-          
-          if (!manuscriptImg) {
-            console.warn('Manuscript image ref not found')
-            return
-          }
-          
-          // Wait for image to be fully loaded and visible
-          if (!manuscriptImg.complete || manuscriptImg.naturalWidth === 0) {
-            console.log('Image not ready, retrying in 500ms...')
-            setTimeout(() => this.captureLineScreenshot(change, index), 500)
-            return
-          }
-          
-          const imgNaturalWidth = manuscriptImg.naturalWidth
-          const imgNaturalHeight = manuscriptImg.naturalHeight
-          
-          console.log(`Image dimensions: ${imgNaturalWidth}x${imgNaturalHeight}`)
-          console.log(`Capturing lines ${change.start_line}-${change.end_line} for ${change.scribe}`)
-          
-          if (imgNaturalWidth === 0 || imgNaturalHeight === 0) {
-            console.warn('Image dimensions not available, retrying...')
-            setTimeout(() => this.captureLineScreenshot(change, index), 500)
-            return
-          }
-          
-          // Use the actual total lines from results
-          const totalLines = this.results?.statistics?.total_lines || 30
-          console.log(`Total lines in document: ${totalLines}`)
-          
-          // More precise positioning based on manuscript structure
-          const topMargin = 0.08 // 8% top margin
-          const bottomMargin = 0.12 // 12% bottom margin  
-          const textAreaHeight = 1 - topMargin - bottomMargin
-          
-          // Calculate line spacing
-          const lineSpacing = textAreaHeight / totalLines
-          
-          // Calculate positions for the specific lines with padding
-          const startLineIndex = Math.max(0, change.start_line - 1)
-          const endLineIndex = Math.min(totalLines - 1, change.end_line - 1)
-          
-          // Add padding above and below the target lines
-          const paddingLines = 1.0
-          const startY = topMargin + ((startLineIndex - paddingLines) * lineSpacing)
-          const endY = topMargin + ((endLineIndex + paddingLines + 1) * lineSpacing)
-          
-          // Crop area calculations - wider area to capture full lines
-          const cropX = 0.02 // 2% left margin
-          const cropWidth = 0.96 // 96% width to include full lines
-          const cropY = Math.max(0, startY)
-          const cropHeight = Math.min(1 - cropY, endY - startY)
-          
-          console.log(`Crop percentages - x:${cropX}, y:${cropY}, w:${cropWidth}, h:${cropHeight}`)
-          
-          // Convert to pixel coordinates
-          const sourceX = Math.round(cropX * imgNaturalWidth)
-          const sourceY = Math.round(cropY * imgNaturalHeight)
-          const sourceWidth = Math.round(cropWidth * imgNaturalWidth)
-          const sourceHeight = Math.round(cropHeight * imgNaturalHeight)
-          
-          console.log(`Source pixels: x=${sourceX}, y=${sourceY}, w=${sourceWidth}, h=${sourceHeight}`)
-          
-          // Ensure we have valid dimensions
-          if (sourceWidth <= 0 || sourceHeight <= 0) {
-            console.error('Invalid crop dimensions calculated')
-            return
-          }
-          
-          // Set canvas dimensions
-          const canvasWidth = 400
-          const aspectRatio = sourceWidth / sourceHeight
-          const canvasHeight = Math.max(60, Math.round(canvasWidth / aspectRatio))
-          
-          canvas[0].width = canvasWidth
-          canvas[0].height = canvasHeight
-          
-          // Clear canvas
-          ctx.clearRect(0, 0, canvasWidth, canvasHeight)
-          
-          try {
-            // Draw the cropped section
-            ctx.drawImage(
-              manuscriptImg,
-              sourceX, sourceY, sourceWidth, sourceHeight,
-              0, 0, canvasWidth, canvasHeight
-            )
-            
-            // Add a border to help visualize the crop
-            ctx.strokeStyle = 'rgba(220, 20, 60, 0.8)'
-            ctx.lineWidth = 2
-            ctx.strokeRect(1, 1, canvasWidth - 2, canvasHeight - 2)
-            
-            // Add line indicators
-            ctx.strokeStyle = 'rgba(255, 0, 0, 0.4)'
-            ctx.lineWidth = 1
-            
-            // Draw lines to indicate where each text line should be
-            for (let i = startLineIndex; i <= endLineIndex; i++) {
-              const relativeY = ((topMargin + (i * lineSpacing)) - cropY) / cropHeight
-              const lineY = relativeY * canvasHeight
-              
-              if (lineY >= 0 && lineY <= canvasHeight) {
-                ctx.beginPath()
-                ctx.moveTo(10, lineY)
-                ctx.lineTo(canvasWidth - 10, lineY)
-                ctx.stroke()
-                
-                // Add line number
-                ctx.fillStyle = 'rgba(255, 0, 0, 0.8)'
-                ctx.font = '10px Arial'
-                ctx.fillText(`${i + 1}`, 5, lineY - 2)
-              }
-            }
-            
-            console.log(`✓ Successfully captured screenshot for lines ${change.start_line}-${change.end_line}`)
-            
-          } catch (error) {
-            console.error('Failed to capture line screenshot:', error)
-            // Draw a detailed error placeholder
-            ctx.fillStyle = '#f8f9fa'
-            ctx.fillRect(0, 0, canvasWidth, canvasHeight)
-            
-            ctx.fillStyle = '#dc3545'
-            ctx.font = 'bold 14px Arial'
-            ctx.textAlign = 'center'
-            ctx.fillText('Capture Failed', canvasWidth / 2, canvasHeight / 2 - 20)
-            
-            ctx.fillStyle = '#6c757d'
-            ctx.font = '12px Arial'
-            ctx.fillText(`Lines ${change.start_line}-${change.end_line}`, canvasWidth / 2, canvasHeight / 2)
-            ctx.fillText(change.scribe, canvasWidth / 2, canvasHeight / 2 + 20)
-          }
-        })
-      }, 200) // Initial delay to ensure DOM is ready
+    handleImageError(event) {
+      console.error('Failed to load scribe sample image:', event.target.src)
+      event.target.style.display = 'none'
+    },
+    
+    handleImageLoad(event) {
+      console.log('Scribe sample image loaded successfully:', event.target.src)
+    },
+    
+    // Build neat line preview list for a scribe-change range using backend crops
+    getLineScreensForChange(change) {
+      const lines = (this.results?.line_screenshots || []).filter(
+        l => l.lineNumber >= change.start_line && l.lineNumber <= change.end_line
+      )
+      if (!lines.length) return []
+      // Prefer middle and end samples for variety
+      const pick = (arr, n) => {
+        if (arr.length <= n) return arr
+        const mid = Math.floor(arr.length / 2)
+        const idx = [0, mid, arr.length - 1]
+        return idx.slice(0, n).map(i => arr[i])
+      }
+      return pick(lines, 3).map(l => ({
+        lineNumber: l.lineNumber,
+  src: l.screenshot || (l.url ? `${this.backendBase}${l.url}` : ''),
+      })).filter(x => !!x.src)
     },
     
     // Debug method to help calibrate line positioning
@@ -429,12 +326,13 @@ export default {
       this.results = null
       
       try {
-        // Convert image URL to blob for upload
+        console.log('Starting scribe analysis...')
+
         if (!this.currentPageImage) {
           throw new Error('No page image available for analysis')
         }
         
-        // Fetch the image and convert to blob
+        // Fetch the image and convert to blob for upload
         const imageResponse = await fetch(this.currentPageImage)
         if (!imageResponse.ok) {
           throw new Error('Failed to fetch page image')
@@ -446,7 +344,7 @@ export default {
         formData.append('image', imageBlob, 'manuscript_page.jpg')
         
         // Call the Python backend
-        const response = await fetch('http://localhost:5001/analyze', {
+  const response = await fetch(`${this.backendBase}/analyze`, {
           method: 'POST',
           body: formData
         })
@@ -456,64 +354,75 @@ export default {
         }
         
         const data = await response.json()
+        console.log('Raw backend response:', {
+          scribe_changes: data.scribe_changes?.length || 0,
+          line_screenshots: data.line_screenshots?.length || 0,
+          scribe_samples: Object.keys(data.scribe_samples || {}).length,
+          total_lines: data.total_lines
+        })
         
         // Transform backend response to frontend format
         this.results = this.transformBackendResults(data)
-        this.totalLinesEstimate = data.total_lines || this.totalLinesEstimate
-        this.analysisCompleted = true
+        console.log('Analysis results transformed:', this.results)
         
       } catch (error) {
         console.error('Analysis failed:', error)
-        this.results = null
-        this.analysisCompleted = true
-        
-        // Show error to user
         alert(`Scribe analysis failed: ${error.message}`)
+        
       } finally {
         this.isAnalyzing = false
+        this.analysisCompleted = true
       }
     },
     
     transformBackendResults(data) {
-      const scribeChanges = data.scribe_changes || []
+      const scribeChangesRaw = data.scribe_changes || []
       const totalLines = data.total_lines || 30
-      
-      // Create primary scribe
-      const primaryScribe = {
-        name: "Primary Scribe",
-        confidence: 0.85,
-        explanation: `Main handwriting style found throughout the manuscript. Analysis processed ${totalLines} text lines.`
-      }
-      
-      // Transform scribe changes - use the new format with start_line, end_line, and scribe name
-      const secondaryScribes = scribeChanges.map((change) => ({
+
+      // Normalize changes and attach samples
+      const normalized = scribeChangesRaw.map((change) => ({
         scribe: change.scribe || `Scribe at line ${change.line_number}`,
         confidence: change.confidence || 0.7,
         start_line: change.start_line || change.line_number,
         end_line: change.end_line || (change.line_number + 1),
-        explanation: change.explanation || "Handwriting change detected through analysis."
+        explanation: change.explanation || 'Handwriting change detected through analysis.',
+        samples: change.samples || (data.scribe_samples && data.scribe_samples[change.scribe]) || []
       }))
-      
-      // Calculate statistics
-      const totalScribes = 1 + secondaryScribes.length
-      const avgConfidence = secondaryScribes.length > 0 
-        ? (primaryScribe.confidence + secondaryScribes.reduce((sum, s) => sum + s.confidence, 0)) / totalScribes
-        : primaryScribe.confidence
-      
-      console.log('Transformed results:', {
-        primary_scribe: primaryScribe,
-        scribe_changes: secondaryScribes,
-        statistics: {
-          total_scribes: totalScribes,
-          overall_confidence: avgConfidence,
-          analysis_time: 1500,
-          total_lines: totalLines
-        }
-      })
-      
+
+      // Choose primary as the longest segment by line count
+      let primary = null
+      if (normalized.length) {
+        primary = normalized.reduce((best, cur) => {
+          const lenBest = (best.end_line - best.start_line + 1)
+          const lenCur = (cur.end_line - cur.start_line + 1)
+          return lenCur > lenBest ? cur : best
+        })
+      }
+
+      const primaryScribe = primary ? {
+        name: primary.scribe,
+        confidence: primary.confidence,
+        explanation: primary.explanation
+      } : {
+        name: 'Primary Scribe',
+        confidence: 0.85,
+        explanation: `Main handwriting style found throughout the manuscript. Analysis processed ${totalLines} text lines.`
+      }
+
+      const secondaryScribes = primary
+        ? normalized.filter(s => s !== primary)
+        : normalized
+
+      // Stats
+      const all = [primaryScribe, ...secondaryScribes.map(s => ({ name: s.scribe, confidence: s.confidence }))].filter(Boolean)
+      const totalScribes = all.length
+      const avgConfidence = all.length ? all.reduce((sum, s) => sum + (s.confidence || 0), 0) / all.length : 0.8
+
       return {
+        total_lines: totalLines,
         primary_scribe: primaryScribe,
         scribe_changes: secondaryScribes,
+        line_screenshots: data.line_screenshots || [],
         statistics: {
           total_scribes: totalScribes,
           overall_confidence: avgConfidence,
@@ -623,13 +532,40 @@ export default {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-.line-screenshot {
+.line-previews {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.line-shot {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 120px;
+  max-width: 45%;
+}
+
+.line-shot img {
   width: 100%;
   height: auto;
   display: block;
   border-radius: 8px;
-  background: #f8f9fa;
-  border: 2px solid #e9ecef;
+  background: #fff;
+  border: 1px solid #e9ecef;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+}
+
+.line-shot .badge {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.65);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .screenshot-overlay {
@@ -948,4 +884,38 @@ export default {
     height: 90%;
   }
 }
+/* Scribe preview samples styling */
+.scribe-previews {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin: 8px 0 12px;
+}
+
+.scribe-shot {
+  display: block;
+  width: 160px;
+  max-width: 30%;
+  aspect-ratio: 5 / 2;
+  object-fit: cover;
+  border-radius: 8px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(147, 51, 234, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.scribe-shot:hover {
+  transform: scale(1.02);
+  transition: transform 0.2s ease;
+}
+
+/* Ensure scribe modal has highest z-index */
+.scribe-popup-overlay {
+  z-index: 7000 !important;
+}
+
+.scribe-popup-container {
+  z-index: 7001 !important;
+}
+
 </style>

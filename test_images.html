@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test OCR Images</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .test-section { margin: 20px 0; border: 1px solid #ccc; padding: 15px; }
+        .screenshot { border: 2px solid #333; margin: 10px 0; max-width: 100%; }
+        .error { color: red; }
+        .success { color: green; }
+    </style>
+</head>
+<body>
+    <h1>OCR Image Test</h1>
+    
+    <div class="test-section">
+        <h3>Upload Test Image</h3>
+        <input type="file" id="imageInput" accept="image/*">
+        <button onclick="testUpload()">Test Backend</button>
+    </div>
+    
+    <div class="test-section">
+        <h3>Results</h3>
+        <div id="results"></div>
+    </div>
+
+    <script>
+        async function testUpload() {
+            const fileInput = document.getElementById('imageInput');
+            const resultsDiv = document.getElementById('results');
+            
+            if (!fileInput.files[0]) {
+                resultsDiv.innerHTML = '<div class="error">Please select an image first!</div>';
+                return;
+            }
+            
+            resultsDiv.innerHTML = '<div>Processing...</div>';
+            
+            try {
+                const formData = new FormData();
+                formData.append('image', fileInput.files[0]);
+                
+                const response = await fetch('http://localhost:5001/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                console.log('Backend response:', data);
+                
+                let html = `
+                    <div class="success">✅ Backend Response Received</div>
+                    <div><strong>OCR Available:</strong> ${data.ocr_available}</div>
+                    <div><strong>Scribe Changes:</strong> ${data.scribe_changes?.length || 0}</div>
+                    <div><strong>Line Screenshots:</strong> ${data.line_screenshots?.length || 0}</div>
+                `;
+                
+                if (data.line_screenshots && data.line_screenshots.length > 0) {
+                    html += '<h4>Line Screenshots:</h4>';
+                    
+                    data.line_screenshots.slice(0, 5).forEach((line, index) => {
+                        html += `
+                            <div style="border: 1px solid #ddd; margin: 10px 0; padding: 10px;">
+                                <div><strong>Line ${line.lineNumber}:</strong> "${line.text}"</div>
+                                <div><strong>Size:</strong> ${line.bbox?.width || 0}x${line.bbox?.height || 0}</div>
+                                <div><strong>Screenshot Data Length:</strong> ${line.screenshot?.length || 0} chars</div>
+                                ${line.screenshot ? `
+                                    <div><strong>Screenshot:</strong></div>
+                                    <img class="screenshot" src="${line.screenshot}" 
+                                         alt="Line ${line.lineNumber}" 
+                                         onload="console.log('Image ${index} loaded successfully')"
+                                         onerror="console.error('Image ${index} failed to load'); this.style.background='red';">
+                                ` : '<div class="error">No screenshot data</div>'}
+                            </div>
+                        `;
+                    });
+                } else {
+                    html += '<div class="error">❌ No line screenshots in response</div>';
+                }
+                
+                resultsDiv.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Error:', error);
+                resultsDiv.innerHTML = `<div class="error">❌ Error: ${error.message}</div>`;
+            }
+        }
+    </script>
+</body>
+</html>
