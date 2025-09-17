@@ -1,4 +1,6 @@
-# quill_1.0
+# QuillApp - Manuscript Analysis Tool
+
+A Vue.js application for manuscript analysis with advanced scribe detection capabilities.
 
 ## Project setup
 ```
@@ -20,24 +22,57 @@ npm run build
 npm run lint
 ```
 
+## Scribe Detection Backend
+
+### Setup
+1. Navigate to the backend directory:
+```bash
+cd python-backend
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Start the backend server:
+```bash
+python3 simple_backend.py
+```
+
+The backend will be available at: http://localhost:5001
+
+### Optional tuning
+The popup sends optional fields to `/analyze`:
+- `z_thresh` (float, e.g. 2.0), `min_gap` (int), `min_run` (int),
+- `illum_frac` (float, default 0.035), `sauvola_window` (int, default 31),
+- `algo` = `auto` | `peaks` | `ruptures`, plus optional `ruptures_pen` (float).
+
+Install extras:
+```bash
+pip install -r python-backend/requirements.txt
+```
+
+### Frontend Configuration
+Set the backend URL in your environment:
+```bash
+echo VUE_APP_BACKEND_URL=http://localhost:5001 > .env.local
+```
+
+## Features
+
+### Scribe Detection
+- **Robust Analysis**: Uses adaptive peak detection with ruptures fallback for complex manuscripts
+- **Explainable Results**: Hover over confidence percentages to see detailed explanations
+- **Parameter Controls**: Adjust sensitivity, gaps, preprocessing settings via UI
+- **Deterministic Sampling**: Always shows exactly 2 representative samples per scribe
+- **PDF Export**: Export analysis results as PDF reports
+
+### Technical Details
+- **OCR Integration**: Uses pytesseract for precise line detection
+- **Change Point Detection**: Implements ruptures library for principled scribe boundary detection
+- **Feature Extraction**: Combines LBP textures, HOG descriptors, and color statistics
+- **Preprocessing**: Configurable illumination correction, binarization, and deskewing
+
 ### Customize configuration
 See [Configuration Reference](https://cli.vuejs.org/config/).
-
-## Scribe detection backend
-
-The Scribe Detection popup calls a Python backend at `VUE_APP_BACKEND_URL` (default `http://localhost:5001`).
-
-1) Start the backend (from `python-backend/`):
-	- Create/activate a venv and install deps (Flask, flask-cors, opencv-python, numpy, pillow, scikit-image, scipy, requests)
-	- Run `python3 simple_backend.py` (serves on port 5001)
-
-2) Configure the frontend to reach the backend:
-	- Create `.env.local` with:
-	  - `VUE_APP_BACKEND_URL=http://localhost:5001`
-
-3) Run the app:
-```
-npm run serve
-```
-
-The popup will now display neat, backend-segmented line crops and scribe sample images.

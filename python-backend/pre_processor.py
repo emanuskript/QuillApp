@@ -107,14 +107,13 @@ def binarize_sauvola(gray: np.ndarray, window: int = 31, k: float = 0.2) -> np.n
     if _HAS_SAUVOLA:
         try:
             thresh = threshold_sauvola(gray, window_size=window, k=k)
-            # Invert: 255 for ink (darker), 0 for background
-            binary = (gray <= thresh).astype(np.uint8) * 255
+            binary = (gray > thresh).astype(np.uint8) * 255
             return binary
         except Exception:
             pass
     
-    # Fallback to Otsu (inverted so ink=255)
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Fallback to Otsu
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return binary
 
 def preprocess(bgr_img: np.ndarray,

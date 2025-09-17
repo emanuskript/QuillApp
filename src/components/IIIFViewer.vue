@@ -439,7 +439,7 @@
 
    <!-- Floating Scribe Detection Button -->
    <div class="floating-scribe-button" @click="openScribeDetection">
-     <i class="fa-solid fa-user-pen"></i>
+     <img :src="require('@/assets/pharosight_icon_no_text.png')" alt="PharoSight" class="scribe-button-icon" />
    </div>
     </div>
 
@@ -4461,36 +4461,43 @@ div.statistics-popup,
 /* Floating Scribe Detection Button */
 .floating-scribe-button {
   position: fixed;
-  right: 30px;
+  left: 15px;
   top: 50%;
   transform: translateY(-50%);
   width: 60px;
   height: 60px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #1a1a1a 0%, #2c2c2c 50%, #fbbf24 100%);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+  box-shadow: 0 8px 25px rgba(251, 191, 36, 0.3);
   transition: all 0.3s ease;
   z-index: 1000;
-  border: 3px solid white;
+  border: 3px solid #fbbf24;
 }
 
 .floating-scribe-button:hover {
   transform: translateY(-50%) scale(1.1);
-  box-shadow: 0 12px 35px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 12px 35px rgba(251, 191, 36, 0.5);
+  background: linear-gradient(135deg, #000000 0%, #fbbf24 50%, #1a1a1a 100%);
 }
 
 .floating-scribe-button:active {
   transform: translateY(-50%) scale(0.95);
 }
 
-.floating-scribe-button i {
-  color: white;
-  font-size: 1.5em;
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+.floating-scribe-button .scribe-button-icon {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  transition: all 0.3s ease;
+}
+
+.floating-scribe-button:hover .scribe-button-icon {
+  filter: drop-shadow(0 2px 6px rgba(251, 191, 36, 0.6)) brightness(1.2);
 }
 
 .floating-scribe-button::before {
@@ -4499,7 +4506,7 @@ div.statistics-popup,
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  background: inherit;
+  background: radial-gradient(circle, rgba(251, 191, 36, 0.4) 0%, rgba(0, 0, 0, 0.6) 100%);
   z-index: -1;
   opacity: 0;
   transform: scale(1);
@@ -4507,7 +4514,7 @@ div.statistics-popup,
 }
 
 .floating-scribe-button:hover::before {
-  opacity: 0.3;
-  transform: scale(1.2);
+  opacity: 1;
+  transform: scale(1.3);
 }
 </style>

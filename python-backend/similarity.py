@@ -13,14 +13,16 @@ try:
 except Exception:
     _HAS_SCIPY = False
 
+# Optional, principled change-point detection
+try:
+    import ruptures as rpt
+    _HAS_RUPTURES = True
+except Exception:
+    _HAS_RUPTURES = False
+
 from feature_extractor import (
     line_embedding, lbp_hist, hog_hist, central_band_coords, color_stats_hv
 )
-try:
-    from sklearn.cluster import KMeans  # optional fallback
-    _HAS_SK = True
-except Exception:
-    _HAS_SK = False
 
 def _cosine_consecutive(X: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     if X.shape[0] < 2:
@@ -142,39 +144,49 @@ def _sigmoid(x: float) -> float:
 
 def _reason_from_diffs(features_a: Dict, features_b: Dict) -> str:
     msgs = []
+    specific_details = []
+    
     # slant (dominant angle)
     da = features_a["dom_angle"]
     db = features_b["dom_angle"]
     d_slant = db - da  # positive → more left-leaning
     if abs(d_slant) >= 7:
-        msgs.append("noticeable change in stroke **slant**")
+        msgs.append("significant change in letter slant")
+        direction = "more upright" if d_slant < 0 else "more left-leaning"
+        specific_details.append(f"The handwriting becomes {direction}, suggesting a different pen grip or writing posture")
 
     # texture (LBP chi²)
     if features_a["lbp_chi2"] >= 0.15:
-        msgs.append("different **stroke texture**/micro-forms")
+        msgs.append("distinct stroke texture patterns")
+        specific_details.append("The micro-patterns within letterforms show different characteristics, indicating varied pen control or writing habits")
 
     # ink darkness (V mean)
     dv = features_b["v_mean"] - features_a["v_mean"]
     if abs(dv) >= 0.05:
-        msgs.append(("**darker ink**" if dv < 0 else "**lighter ink**"))
+        ink_change = "darker ink" if dv < 0 else "lighter ink"
+        msgs.append(ink_change)
+        specific_details.append(f"The {ink_change} suggests either a different writing instrument, ink mixture, or varying pressure application")
 
     # stroke density (coverage)
     dcov = features_b["coverage"] - features_a["coverage"]
     if abs(dcov) >= 0.05:
-        msgs.append(("**heavier strokes/pressure**" if dcov > 0 else "**finer strokes**"))
+        pressure_change = "heavier strokes and increased pressure" if dcov > 0 else "finer, lighter strokes"
+        msgs.append(pressure_change)
+        if dcov > 0:
+            specific_details.append("The increased stroke weight indicates either a different pen type, more ink flow, or a scribe applying greater writing pressure")
+        else:
+            specific_details.append("The lighter stroke weight suggests a finer writing instrument, less ink, or a more delicate writing approach")
 
     if not msgs:
-        msgs = ["subtle but consistent differences in slant/texture/ink"]
-    # Paleographic phrasing:
-    lead = "Potential change of scribal hand:"
-    details = "; ".join(msgs)
-    # add directional hint for slant
-    if abs(d_slant) >= 7:
-        direction = "more right-leaning" if d_slant < 0 else "more left-leaning"
-        details += f" (second line appears {direction})."
-    else:
-        details += "."
-    return f"{lead} {details}"
+        msgs = ["subtle but consistent paleographic differences"]
+        specific_details.append("While individual changes are minor, the cumulative handwriting characteristics suggest a transition between scribal hands")
+        specific_details.append("This could indicate a change in scribe, different writing conditions, or the same scribe writing at a different time")
+    
+    # Build comprehensive explanation
+    main_changes = ", ".join(msgs)
+    detailed_explanation = " ".join(specific_details[:2])  # Limit to 2 detail sentences for readability
+    
+    return f"Different scribal hand detected based on {main_changes}. {detailed_explanation}"
 
 def _sort_by_num(paths: List[str]) -> List[str]:
     def key(p):
@@ -196,7 +208,9 @@ class ImageProcessor:
                  use_color=True,
                  w_lbp=1.0,
                  w_hog=1.0,
-                 w_color=0.5):
+                 w_color=0.5,
+                 algo: str = "auto",        # "auto" | "peaks" | "ruptures"
+                 ruptures_pen: Optional[float] = None):
         self.metric = metric
         self.smooth_win = smooth_win
         self.z_method = z_method
@@ -206,6 +220,12 @@ class ImageProcessor:
         self.resize_height = resize_height
         self.central_band_frac = central_band_frac
         self.central_band_pad = central_band_pad
+        self.use_color = use_color
+        self.w_lbp = w_lbp
+        self.w_hog = w_hog
+        self.w_color = w_color
+        self.algo = algo
+        self.ruptures_pen = ruptures_pen
         self.use_color = use_color
         self.w_lbp = w_lbp
         self.w_hog = w_hog
@@ -240,18 +260,13 @@ class ImageProcessor:
         }
 
     def detect_with_reasons(self, line_paths: List[str]) -> Dict[str, object]:
-        if not line_paths:
-            return {"changes": [], "z": [], "dist": []}
-
+        if not line_paths: return {"changes": [], "z": [], "dist": []}
         # read + embed
         paths = _sort_by_num(line_paths)
-        imgs: List[np.ndarray] = []
-        embs: List[np.ndarray] = []
-        diags: List[Dict[str, float]] = []
+        imgs, embs, diags = [], [], []
         for p in paths:
             img = cv2.imread(p, cv2.IMREAD_COLOR)
-            if img is None:
-                continue
+            if img is None: continue
             imgs.append(img)
             embs.append(line_embedding(
                 img,
@@ -263,54 +278,63 @@ class ImageProcessor:
             ))
             diags.append(self._diagnostics(img))
 
-        if len(embs) < 2:
-            return {"changes": [], "z": [], "dist": []}
-
+        if len(embs) < 2: return {"changes": [], "z": [], "dist": []}
         X = np.vstack(embs).astype(np.float32)
-
+        
         # detect with adaptive threshold if not provided
         change_idxs: List[int] = []
         dist = np.array([])
         z = np.array([])
-        if self.z_thresh is None:
-            # Try descending thresholds until at least one change is found
-            for t in (2.5, 2.2, 2.0, 1.8, 1.6, 1.4):
-                peaks, dist_tmp, z_tmp = detect_change_indices(
-                    X, metric=self.metric, smooth_win=self.smooth_win,
-                    z_method=self.z_method, z_thresh=t, min_gap=self.min_gap
-                )
-                if len(peaks) >= 1:
-                    change_idxs = peaks
-                    dist, z = dist_tmp, z_tmp
-                    break
-            # If still none, keep last dist/z and leave change_idxs empty
-            if z.size == 0 or dist.size == 0:
-                _, dist, z = detect_change_indices(
-                    X, metric=self.metric, smooth_win=self.smooth_win,
-                    z_method=self.z_method, z_thresh=2.0, min_gap=self.min_gap
-                )
-        else:
-            change_idxs, dist, z = detect_change_indices(
+        
+        # 1) Peak/z-score method (fast)
+        def _peaks_method(z_override=None):
+            if z_override is None:
+                z_override = self.z_thresh
+            return detect_change_indices(
                 X, metric=self.metric, smooth_win=self.smooth_win,
-                z_method=self.z_method, z_thresh=self.z_thresh, min_gap=self.min_gap
+                z_method=self.z_method, z_thresh=z_override, min_gap=self.min_gap
             )
 
-        # Fallback: cluster-based boundaries when no peaks
-        if not change_idxs and _HAS_SK and X.shape[0] >= 4:
+        # 2) Ruptures on the smoothed 1D distance signal (principled)
+        def _ruptures_method(smooth_dist):
+            if not _HAS_RUPTURES or smooth_dist.size < 3:
+                return []
+            # Use PELT on 1D with L2; choose a mild penalty if none provided
+            pen = float(self.ruptures_pen) if self.ruptures_pen is not None else max(2.0, 2.0*np.log(len(smooth_dist)))
+            algo = rpt.Pelt(model="l2").fit(smooth_dist.reshape(-1, 1))
             try:
-                km = KMeans(n_clusters=2, n_init=10, random_state=0)
-                labels = km.fit_predict(X)
-                raw = [i for i in range(len(labels) - 1) if labels[i] != labels[i + 1]]
-                # Enforce min_run (minimum lines between boundaries)
-                filtered: List[int] = []
-                last = -999
-                for i in raw:
-                    if i - last >= self.min_run:
-                        filtered.append(i)
-                        last = i
-                change_idxs = filtered
+                bkps = algo.predict(pen=pen)  # 1-based ends, includes len
             except Exception:
-                change_idxs = []
+                return []
+            raw = [i-1 for i in bkps[:-1]]  # to boundary indices between lines
+            # enforce min_run
+            kept = []
+            last = -999
+            for i in raw:
+                if i - last >= self.min_run:
+                    kept.append(i)
+                    last = i
+            return kept
+
+        use_peaks = (self.algo in ("auto", "peaks"))
+        use_rupt = (self.algo in ("auto", "ruptures"))
+
+        # Always compute a baseline dist/z (used for confidence either way)
+        _, dist, z = _peaks_method(self.z_thresh if self.z_thresh is not None else 2.0)
+
+        if use_peaks:
+            if self.z_thresh is None:
+                for t in (2.5, 2.2, 2.0, 1.8, 1.6, 1.4):
+                    peaks, dist_tmp, z_tmp = _peaks_method(t)
+                    if len(peaks) >= 1:
+                        change_idxs = peaks; dist = dist_tmp; z = z_tmp; break
+            else:
+                change_idxs, dist, z = _peaks_method(self.z_thresh)
+
+        if use_rupt and (not change_idxs):
+            # run ruptures on smoothed distance if peaks found none
+            smooth_dist = _smooth(consecutive_distances(X, metric=self.metric), win=self.smooth_win)
+            change_idxs = _ruptures_method(smooth_dist)
 
         # Enforce min_gap across any change_idxs we have
         final_changes: List[int] = []
@@ -318,19 +342,16 @@ class ImageProcessor:
             if not final_changes or (i - final_changes[-1]) >= self.min_gap:
                 final_changes.append(i)
 
-        # Build change objects with reasons and confidences
-        changes: List[Dict[str, object]] = []
+        changes = []
         for i in final_changes:
             if 0 <= i < len(imgs) - 1:
-                zi = float(z[i]) if isinstance(z, np.ndarray) and z.size > i else 2.0
-                conf = _sigmoid(zi - 2.0)
-                a, b = diags[i], diags[i + 1]
+                # confidence from z: squash with sigmoid around z=2.0
+                conf = _sigmoid(float(z[i] - 2.0))  # ~0.88 at z=2, ~0.95 at z=3
+                # explanations
+                a, b = diags[i], diags[i+1]
+                # texture dissimilarity via chi² on LBP
                 a["lbp_chi2"] = _chi2(a["lbp"], b["lbp"])
                 reason = _reason_from_diffs(a, b)
                 changes.append({"index": int(i), "confidence": float(conf), "reason": reason})
 
-        return {
-            "changes": changes,
-            "z": z.tolist() if isinstance(z, np.ndarray) else [],
-            "dist": dist.tolist() if isinstance(dist, np.ndarray) else []
-        }
+        return {"changes": changes, "z": z.tolist(), "dist": dist.tolist()}
