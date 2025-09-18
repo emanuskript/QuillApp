@@ -13,18 +13,22 @@ class LineSegmentor:
         :param bin_img:     the handwritten paragraph image after binarization.
         """
         
-        # Store references to the page images.
+        # Store references
         self.gray_img = gray_img
         self.bin_img = bin_img
-        
-        # Get horizontal histogram.
-        self.hor_hist = np.sum(bin_img, axis=1, dtype=int) // 255
-        
-        # Get line density thresholds.
-        self.threshold_high = int(np.max(self.hor_hist) // 3)
-        self.threshold_low = 25
-        
-        # Initialize empty lists.
+
+        # Ink mask: 1 where ink (black), 0 where background
+        self.ink = (bin_img == 0).astype(np.uint8)
+
+        # Horizontal ink histogram (per row)
+        self.hor_hist = np.sum(self.ink, axis=1, dtype=int)
+
+        # Robust thresholds based on ink, not background
+        hmax = int(self.hor_hist.max()) if self.hor_hist.size else 0
+        self.threshold_high = max(5, int(0.20 * hmax))   # 20% of max row ink
+        self.threshold_low  = max(2, int(0.05 * hmax))   # 5%  of max row ink
+
+        # init
         self.peaks = []
         self.valleys = []
         self.lines_boundaries = []
@@ -173,38 +177,38 @@ class LineSegmentor:
             self.detect_valleys()
     
     def detect_line_boundaries(self):
-        """
-        Detects handwritten lines of the image using the peaks and valleys.
-
-        And updates self.lines_boundaries in correspondence.
-        """
-        
-        # Get image dimensions.
+        """Detect handwritten lines using peaks/valleys; trim horizontally with ink."""
         height, width = self.bin_img.shape
-        
         self.lines_boundaries = []
-        
+
         i = 1
         while i < len(self.valleys):
             u = self.valleys[i - 1]
             d = self.valleys[i]
-            l = 0
-            r = width - 1
             i += 1
-            
-            while u < d and self.hor_hist[u] == 0:
+
+            # tighten up to first/last non-empty row
+            while u < d and self.hor_hist[u] <= self.threshold_low:
                 u += 1
-            while d > u and self.hor_hist[d] == 0:
+            while d > u and self.hor_hist[d] <= self.threshold_low:
                 d -= 1
-            
-            ver_hist = np.sum(self.bin_img[u:d + 1, :], axis=0) // 255
-            
-            while l < r and ver_hist[l] == 0:
+            if d - u < 6:      # too thin: skip
+                continue
+
+            # vertical ink histogram inside this band
+            ver_hist = np.sum(self.ink[u:d + 1, :], axis=0, dtype=int)
+            vmax = int(ver_hist.max()) if ver_hist.size else 0
+            vth  = max(2, int(0.05 * vmax))   # 5% of band's max ink
+
+            # trim left/right using the vth threshold (not just >0)
+            l, r = 0, width - 1
+            while l < r and ver_hist[l] <= vth:
                 l += 1
-            while r > l and ver_hist[r] == 0:
+            while r > l and ver_hist[r] <= vth:
                 r -= 1
-            
-            self.lines_boundaries.append((l, u, r, d))
+
+            if r - l >= 10 and d - u >= 8:
+                self.lines_boundaries.append((l, u, r, d))
     
     def get_peak_in_range(self, up: int, down: int) -> int:
         """

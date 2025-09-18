@@ -29,6 +29,54 @@ JOBS_DIR = STATIC_DIR / "jobs"
 ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
 MAX_CONTENT_LENGTH = 20 * 1024 * 1024  # 20MB
 
+# ------------------ Morphological Line Segmentation ------------------
+def _ink_mask(binary: np.ndarray) -> np.ndarray:
+    # binary is {0,255}; we want 255=ink for morphology
+    return ((binary == 0).astype(np.uint8) * 255)
+
+def _segment_lines_morph(binary: np.ndarray) -> List[Tuple[int,int,int,int]]:
+    """
+    RLSA-style line grouping: returns list of bboxes [L,U,R,D] for the WHOLE page/column.
+    Works on noisy parchment, rubrics, initials.
+    """
+    H, W = binary.shape[:2]
+    if H == 0 or W == 0:
+        return []
+
+    ink = _ink_mask(binary)
+
+    # Smooth horizontally to connect letters within a line (dynamic kernel).
+    kx = max(25, W // 40)      # ~2.5% of page width
+    hx = cv2.getStructuringElement(cv2.MORPH_RECT, (kx, 1))
+    merged = cv2.dilate(ink, hx, 1)
+    merged = cv2.erode(merged, hx, 1)
+
+    # Light vertical shrink to avoid line merging (descenders/ascenders).
+    ky = max(3, H // 120)      # ~0.8% of page height
+    vy = cv2.getStructuringElement(cv2.MORPH_RECT, (1, ky))
+    separated = cv2.erode(merged, vy, 1)
+
+    # Connected components → candidate lines
+    num, labels, stats, _ = cv2.connectedComponentsWithStats((separated > 0).astype(np.uint8), 8)
+    boxes = []
+    # Heuristics by relative size (avoids giant page-spanning blobs and tiny noise)
+    min_h = max(8, H // 200)               # avoid tiny slivers
+    max_h = max(min(H // 6, 180), min_h)   # avoid blocks that are too tall
+    min_w = max(40, W // 8)                # at least 12.5% page width
+
+    for i in range(1, num):
+        x, y, w, h, area = stats[i]
+        if h < min_h or h > max_h or w < min_w:
+            continue
+        # expand a few px to include edges
+        L = max(0, x - 2); U = max(0, y - 2)
+        R = min(W-1, x + w + 2); D = min(H-1, y + h + 2)
+        boxes.append([L, U, R, D])
+
+    # sort by Y (top to bottom)
+    boxes.sort(key=lambda b: b[1])
+    return boxes
+
 # heuristics for cropping lines
 MIN_LINE_WIDTH = 150
 MAX_LINE_HEIGHT = 800  # Increased to allow larger line segments
@@ -77,56 +125,81 @@ def clamp_bbox(x0, y0, x1, y1, W, H):
     return x0, y0, x1, y1
 
 # ------------------ Line segmentation ------------------
+def _column_or_page_regions(binary: np.ndarray) -> List[Tuple[int,int]]:
+    """Stable vertical split: returns [(xL,xR), ...] for columns/pages."""
+    ink_col = np.sum((binary == 0).astype(np.uint8), axis=0).astype(np.float32)
+    if ink_col.size == 0:
+        return [(0, binary.shape[1])]
+    # smooth to ignore small gaps (gutter/illumination)
+    k = np.ones(31, np.float32) / 31.0
+    smooth = np.convolve(ink_col, k, mode="same")
+    th = max(8.0, 0.08 * float(smooth.max()))   # 8% of max ink
+    blocks = []
+    in_blk, s = False, 0
+    for x, v in enumerate(smooth):
+        if not in_blk and v > th:
+            in_blk, s = True, x
+        elif in_blk and v <= th:
+            if x - s >= 40:
+                blocks.append((s, x))
+            in_blk = False
+    if in_blk and (len(smooth) - s) >= 40:
+        blocks.append((s, len(smooth)))
+    return blocks if blocks else [(0, binary.shape[1])]
+    return blocks if blocks else [(0, binary.shape[1])]
+
 def segment_lines(img_path: Path) -> List[Dict]:
-    """
-    Segment lines using our custom line segmentation algorithm
-    """
     img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError("Failed to read uploaded image")
-    
-    # Preprocess the image
+
     binary = preprocess(img)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # Create line segmentor
-    segmentor = LineSegmentor(gray, binary)
-    
-    # Get line boundaries
-    lines = []
-    H, W = img.shape[:2]
-    
-    # Check if any lines were detected
-    print(f"LineSegmentor detected {len(segmentor.lines_boundaries) if segmentor.lines_boundaries else 0} line boundaries")
-    if not segmentor.lines_boundaries:
-        # If no lines detected, treat entire image as one line
-        print(f"No line boundaries detected, using entire image as one line: {W}x{H}")
+    H, W = gray.shape[:2]
+
+    lines: List[Dict] = []
+    idx = 0
+
+    # Split into vertical regions (columns/pages) first
+    regions = _column_or_page_regions(binary)
+
+    for (xL, xR) in regions:
+        sub_bin  = binary[:, xL:xR]
+        sub_gray = gray[:,   xL:xR]
+
+        # 1) Morphological (RLSA) line grouping
+        bboxes = _segment_lines_morph(sub_bin)
+
+        # 2) If too few or too messy, fallback to the old LineSegmentor
+        if len(bboxes) < 2:
+            try:
+                from line_segmentor import LineSegmentor
+                seg = LineSegmentor(sub_gray, sub_bin)
+                for (l,u,r,d) in (seg.lines_boundaries or []):
+                    if (r - l) >= 10 and (d - u) >= 8:
+                        bboxes.append([l, u, r, d])
+            except Exception:
+                pass
+
+        # Re-offset to full image coords and collect
+        for (l,u,r,d) in bboxes:
+            L = max(0, l + xL); R = min(W-1, r + xL)
+            U = max(0, u);      D = min(H-1, d)
+            idx += 1
+            lines.append({
+                "id": f"line_{idx-1}",
+                "boundary": [[L,U],[R,U],[R,D],[L,D]],
+                "bbox": [L,U,R,D]
+            })
+
+    if not lines:
         lines.append({
             "id": "line_0",
-            "boundary": [[0, 0], [W-1, 0], [W-1, H-1], [0, H-1]],
-            "bbox": [0, 0, W-1, H-1]
+            "boundary": [[0,0],[W-1,0],[W-1,H-1],[0,H-1]],
+            "bbox": [0,0,W-1,H-1]
         })
-    else:
-        print(f"Processing {len(segmentor.lines_boundaries)} detected line boundaries:")
-        for i, boundary_tuple in enumerate(segmentor.lines_boundaries):
-            print(f"  Line {i}: boundary_tuple = {boundary_tuple}")
-            # Ensure we have exactly 4 values
-            if len(boundary_tuple) != 4:
-                continue
-                
-            l, u, r, d = boundary_tuple
-            
-            # Create boundary polygon (simple rectangle for now)
-            boundary = [
-                [l, u], [r, u], [r, d], [l, d]
-            ]
-            
-            lines.append({
-                "id": f"line_{i}",
-                "boundary": boundary,
-                "bbox": [l, u, r, d]
-            })
-    
+    # sort globally by top y (just in case regions overlapped a bit)
+    lines.sort(key=lambda ln: ln["bbox"][1])
     return lines
 
 def crop_lines(img_path: Path, lines: List[Dict], out_dir: Path) -> Tuple[List[str], List[List[Tuple[int,int]]]]:
@@ -171,6 +244,23 @@ def crop_lines(img_path: Path, lines: List[Dict], out_dir: Path) -> Tuple[List[s
         idx += 1
 
     return rel_paths, polys
+
+def draw_segmentation_overlay(img_path: Path, lines: List[Dict], out_path: Path) -> None:
+    img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+    if img is None:
+        return
+    overlay = img.copy()
+    for ln in lines:
+        b = ln.get("bbox", [0,0,0,0])
+        L,U,R,D = b if len(b)==4 else (0,0,0,0)
+        cv2.rectangle(
+            overlay, (L,U), (R,D),
+            color=(255, 0, 0),  # BGR: pure blue
+            thickness=2
+        )
+    # semi-transparent draw
+    out = cv2.addWeighted(overlay, 0.65, img, 0.35, 0)
+    cv2.imwrite(str(out_path), out)
 
 def generate_pdf_report_advanced(job_id: str, scribe_changes: List[Dict], page_image: str, line_rel_paths: List[str]) -> str:
     """
@@ -402,6 +492,11 @@ def analyze():
     try:
         lines = segment_lines(up_path)
         line_rel_paths, polygons = crop_lines(up_path, lines, paths["lines"])
+        
+        # make overlay image
+        overlay_path = paths["root"] / "overlay.jpg"
+        draw_segmentation_overlay(up_path, lines, overlay_path)
+        overlay_rel = str(overlay_path.relative_to(STATIC_DIR)).replace("\\", "/")
     except Exception as e:
         log.error(f"Segmentation failed: {e}")
         return jsonify({"error": f"Segmentation failed: {str(e)}"}), 500
@@ -465,6 +560,7 @@ def analyze():
     return jsonify({
         "job_id": job_id,
         "page_image": page_rel,
+        "segmentation_overlay": overlay_rel,
         "polygons": polygons,
         "scribe_changes": scribe_changes,
         "total_lines": len(line_rel_paths),

@@ -56,6 +56,61 @@ RUNS_DIR.mkdir(parents=True, exist_ok=True)
 def serve_static(filename):
     return send_from_directory(STATIC_DIR, filename)
 
+def _split_double_page_if_needed(pil_image):
+    """
+    Return [PIL.Image] list: either [full] or [left, right] if a central gutter is detected.
+    Criteria: deep valley of ink near the middle and both sides contain enough ink.
+    """
+    import numpy as np, cv2
+    img = np.array(pil_image.convert("RGB"))[:, :, ::-1]  # BGR for OpenCV
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    from pre_processor import preprocess
+    bw = preprocess(img)  # 0/255
+    ink = (bw == 0).astype(np.uint8)
+    vproj = ink.sum(axis=0)
+    W = vproj.shape[0]
+    if W < 200:
+        return [pil_image]
+    # search gutter in the central 40%
+    c0, c1 = int(0.3 * W), int(0.7 * W)
+    mid_slice = vproj[c0:c1]
+    if mid_slice.size == 0:
+        return [pil_image]
+    gutter_rel = int(np.argmin(mid_slice))
+    gutter = c0 + gutter_rel
+    left_ink = vproj[:gutter].mean()
+    right_ink = vproj[gutter:].mean()
+    gutter_ink = vproj[gutter:gutter+max(3, W//200)].mean()
+    # strong valley and both sides have text
+    if gutter_ink < 0.25 * max(left_ink, right_ink) and min(left_ink, right_ink) > 0.15 * max(vproj):
+        # split with a small margin to avoid cutting letters
+        pad = max(5, W // 200)
+        L = pil_image.crop((0, 0, max(0, gutter - pad), pil_image.height))
+        R = pil_image.crop((min(pil_image.width, gutter + pad), 0, pil_image.width, pil_image.height))
+        return [L, R]
+    return [pil_image]
+
+def _save_segmentation_overlay(page_abs_path, metas, run_id):
+    """
+    Draw blue rectangles for each detected line and save overlay image.
+    Returns relative URL (under /static).
+    """
+    img = cv2.imread(str(page_abs_path))
+    if img is None:
+        return None
+    overlay = img.copy()
+    for m in metas:
+        x, y, w, h = [int(v) for v in m.get("bbox", [0, 0, 0, 0])]
+        if w <= 0 or h <= 0: 
+            continue
+        # blue boxes (BGR)
+        cv2.rectangle(overlay, (x, y), (x + w, y + h), (255, 0, 0), 2)
+    blended = cv2.addWeighted(overlay, 0.85, img, 0.15, 0)
+    out_rel = f"runs/{run_id}/segmentation_overlay.jpg"
+    out_abs = STATIC_DIR / out_rel
+    cv2.imwrite(str(out_abs), blended)
+    return f"/static/{out_rel}"
+
 def _pick_two_indices(items):
     """Return two 'representative' indices (median & 75th percentile)."""
     if not items: 
@@ -149,27 +204,43 @@ def _segment_and_crop(run_id, file_bytes, illum_frac=0.035, sauvola_window=31, s
         # Convert other modes to RGB
         image = image.convert('RGB')
     
-    # Save the main page image
+    # Save and (maybe) split double page
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    pages = _split_double_page_if_needed(image)
     page_rel = f"runs/{run_id}/manuscript_page.jpg"
     page_abs = STATIC_DIR / page_rel
     image.save(page_abs, 'JPEG')
     
     # Use preprocessing parameters with improved line segmentation
     print(f"Running improved line segmentation with parameters: illum_frac={illum_frac}, sauvola_window={sauvola_window}, sauvola_k={sauvola_k}, do_deskew={do_deskew}")
+    print(f"Detected {len(pages)} page(s) in image")
     
     # Try multiple segmentation approaches in order of preference
     methods_tried = []
     
-    # Method 1: Try original line segmentation with custom parameters
+    # Method 1: try line segmentation per page
     try:
-        metas, line_abs_paths, page_rel = _try_line_segmentation_method(
-            page_abs, run_dir, run_id, illum_frac, sauvola_window, sauvola_k, do_deskew
-        )
-        methods_tried.append("line_segmentation")
-        print(f"Line segmentation successful: {len(line_abs_paths)} lines extracted")
-        return metas, line_abs_paths, page_rel
+        all_metas, all_paths = [], []
+        for p_idx, p_img in enumerate(pages):
+            p_tag = "L" if (len(pages) == 2 and p_idx == 0) else ("R" if len(pages) == 2 else "S")
+            p_rel = f"runs/{run_id}/manuscript_page_{p_tag}.jpg"
+            p_abs = STATIC_DIR / p_rel
+            p_img.save(p_abs, "JPEG")
+            metas, line_abs_paths, _ = _try_line_segmentation_method(
+                p_abs, run_dir, f"{run_id}_{p_tag}", illum_frac, sauvola_window, sauvola_k, do_deskew
+            )
+            # tag page and offset line numbers
+            start_offset = len(all_paths)
+            for i, m in enumerate(metas, 1):
+                m["page"] = p_tag
+                m["line_number"] = start_offset + i
+            all_metas.extend(metas)
+            all_paths.extend(line_abs_paths)
+        if all_paths:
+            methods_tried.append("line_segmentation")
+            print(f"Line segmentation successful: {len(all_paths)} lines extracted across {len(pages)} page(s)")
+            return all_metas, all_paths, page_rel
     except Exception as e:
         print(f"Line segmentation failed: {e}")
         methods_tried.append(f"line_segmentation_failed({str(e)[:50]})")
@@ -450,41 +521,27 @@ def _build_segments_and_samples(run_id: str, line_abs_paths: list, segments: lis
     n = len(line_abs_paths)
     print(f"Processing {len(segments)} detected segments for {n} lines")
     
+    # If there's only one segment, there are no scribe *changes*
+    if len(segments) <= 1:
+        return [], {}, {"segments": segments}
+    
     # Get consistent scribe assignments that handle returns
     scribe_assignments = _assign_scribe_identities(segments, n)
     
     scribe_changes = []
     scribe_samples = {}
     
-    # Define consistent characteristics for each scribe
+    # Define consistent characteristics for each scribe (no hardcoded confidence)
     scribe_characteristics = {
-        "A": {
-            "letterSpacing": "normal",
-            "inkColor": "black", 
-            "handSize": "medium",
-            "style": "formal",
-            "confidence": 0.85,
-            "initial_reason": "Initial scribe identification for the manuscript. This scribe shows consistent handwriting characteristics including uniform letter spacing, consistent stroke weight, and stable baseline alignment throughout the identified lines.",
-            "return_reason": "Return to the primary scribal hand with resumed consistent letterforms and baseline alignment. The paleographic characteristics match the initial scribal identity, confirming manuscript production continuity."
-        },
-        "B": {
-            "letterSpacing": "tight",
-            "inkColor": "brown",
-            "handSize": "small", 
-            "style": "casual",
-            "confidence": 0.78,
-            "initial_reason": "Handwriting transition detected with distinct paleographic characteristics including altered letter formation patterns, modified stroke angles, and different ink flow characteristics compared to the previous scribal hand.",
-            "return_reason": "Secondary scribal hand returns with characteristic tight letter spacing and brown ink flow. The paleographic features remain consistent with the earlier identification."
-        },
-        "C": {
-            "letterSpacing": "loose",
-            "inkColor": "dark_brown",
-            "handSize": "large",
-            "style": "ornate", 
-            "confidence": 0.72,
-            "initial_reason": "Tertiary scribal hand detected showing specialized characteristics with distinct letterforms and modified stroke patterns. This hand exhibits different training or purpose compared to previous scribes.",
-            "return_reason": "Tertiary scribal hand resumes with distinctive ornate letterforms and loose spacing. The paleographic identity matches the previous occurrence."
-        }
+        "A": {"letterSpacing": "normal", "inkColor": "black", "handSize": "medium", "style": "formal",
+              "initial_reason": "Initial scribe identification for the manuscript. This scribe shows consistent handwriting characteristics including uniform letter spacing, consistent stroke weight, and stable baseline alignment throughout the identified lines.",
+              "return_reason": "Return to the primary scribal hand with resumed consistent letterforms and baseline alignment. The paleographic characteristics match the initial scribal identity, confirming manuscript production continuity."},
+        "B": {"letterSpacing": "tight", "inkColor": "brown", "handSize": "small", "style": "casual",
+              "initial_reason": "Handwriting transition detected with distinct paleographic characteristics including altered letter formation patterns, modified stroke angles, and different ink flow characteristics compared to the previous scribal hand.",
+              "return_reason": "Secondary scribal hand returns with characteristic tight letter spacing and brown ink flow. The paleographic features remain consistent with the earlier identification."},
+        "C": {"letterSpacing": "loose", "inkColor": "dark_brown", "handSize": "large", "style": "ornate",
+              "initial_reason": "Tertiary scribal hand detected showing specialized characteristics with distinct letterforms and modified stroke patterns. This hand exhibits different training or purpose compared to previous scribes.",
+              "return_reason": "Tertiary scribal hand resumes with distinctive ornate letterforms and loose spacing. The paleographic identity matches the previous occurrence."}
     }
     
     for assignment in scribe_assignments:
@@ -538,7 +595,6 @@ def _build_segments_and_samples(run_id: str, line_abs_paths: list, segments: lis
             "start_line": start_line,
             "end_line": end_line,
             "scribe": scribe_id,
-            "confidence": characteristics["confidence"],
             "explanation": reason,
             "features": {
                 "letterSpacing": characteristics["letterSpacing"],
@@ -661,6 +717,8 @@ def analyze():
             if isinstance(segment_result, tuple) and len(segment_result) == 3:
                 metas, line_abs_paths, page_rel = segment_result
                 print(f"Successfully unpacked: {len(metas)} metas, {len(line_abs_paths)} paths")
+                # build blue-box overlay
+                overlay_url = _save_segmentation_overlay(STATIC_DIR / page_rel, metas, run_id)
             else:
                 raise RuntimeError(f"_segment_and_crop returned unexpected format: {type(segment_result)}, expected tuple of 3 elements")
         except Exception as e:
@@ -683,12 +741,30 @@ def analyze():
         proc = ImageProcessor(algo=algo, z_thresh=z_thresh, min_gap=min_gap, min_run=min_run,
                               use_color=use_color, ruptures_pen=rupt_pen)
         det_result = proc.detect_with_reasons(line_abs_paths)
-        # Build segments from det_result
+        
         n = len(line_abs_paths)
-        change_idxs = [c["index"] for c in det_result.get("changes", [])]
-        segments = indices_to_segments(n, change_idxs)
-        # Use the real sampler with line images and detected segments
+        # Prefer segments from the detector (may come from clustering fallback)
+        segments = det_result.get("segments")
+        if not segments:
+            change_idxs = [c["index"] for c in det_result.get("changes", [])]
+            segments = indices_to_segments(n, change_idxs)
+
+        # Build scribe structures from actual segments
         scribe_changes, scribe_samples, _ = _build_segments_and_samples(run_id, line_abs_paths, segments)
+
+        # Attach boundary confidences/explanations where we have them
+        boundary_by_idx = {c["index"]: c for c in det_result.get("changes", [])}
+        for seg in scribe_changes:
+            # boundary is the line before seg.start_line (0-based)
+            boundary_idx = max(0, seg["start_line"] - 2)
+            if boundary_idx in boundary_by_idx:
+                b = boundary_by_idx[boundary_idx]
+                seg["confidence"] = float(b.get("confidence", seg.get("confidence", 0.0)))
+                seg["explanation"] = b.get("reason", seg.get("explanation", ""))
+
+        total_scribes = max(1, len(segments))
+        overall_conf = (float(np.mean([c.get("confidence", 0.0) for c in scribe_changes]))
+                        if scribe_changes else 0.0)
         
         # Extract real line screenshots using OCR  
         line_screenshots = []
@@ -721,39 +797,23 @@ def analyze():
         # Require actual line segments
         if not line_segments:
             raise RuntimeError("No line segments could be generated from the preprocessing results")
-        
-        # Attach samples & diagnostics to scribe_changes
-        for ch in scribe_changes:
-            ch["samples"] = scribe_samples.get(ch["scribe"], [])
-            # attach a matching 'reason' if we have one at the boundary just after end_line-1
-            if SIMILARITY_AVAILABLE:
-                boundary_idx = (ch["end_line"] - 1) - 1
-                det_result = locals().get('det_result', {"changes": []})
-                for c in det_result.get("changes", []):
-                    if c["index"] == boundary_idx:
-                        ch["confidence"] = float(c.get("confidence", ch.get("confidence", 0.8)))
-                        ch["explanation"] = c.get("reason", ch.get("explanation", ""))
-                        break
-        
-        # Simple summary stats
-        all_conf = [float(ch.get("confidence", 0.8)) for ch in scribe_changes] or [0.8]
-        overall_conf = float(np.mean(all_conf)) if hasattr(np, "mean") else sum(all_conf) / len(all_conf)
 
         result = {
             "job_id": f"job_{int(time.time())}",
             "run_id": run_id,
             "page_image": page_rel if 'page_rel' in locals() else "manuscript_page.jpg",
+            "segmentation_overlay": overlay_url if 'overlay_url' in locals() else None,  # blue-box image
             "polygons": [],
             "scribe_changes": scribe_changes,
             "total_lines": total_lines,
             "line_screenshots": line_screenshots,  # base64 screenshots of actual crops
             "ocr_available": OCR_AVAILABLE,
-            "scribe_samples": scribe_samples,
+            "scribe_samples": {},               # (we removed fabricated samples)
             "line_segments": line_segments,
             "statistics": {
-                "total_scribes": max(1, len(scribe_changes)),
+                "total_scribes": total_scribes,
                 "overall_confidence": overall_conf,
-                "analysis_time": int((time.time() - analysis_start_time) * 1000),  # Real timing in milliseconds
+                "analysis_time": int((time.time() - analysis_start_time) * 1000),
             },
             "diagnostics": {
                 "z": locals().get('det_result', {}).get("z", []),

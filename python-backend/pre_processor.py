@@ -106,6 +106,7 @@ def binarize_sauvola(gray: np.ndarray, window: int = 31, k: float = 0.2) -> np.n
     """
     Sauvola adaptive thresholding with Otsu fallback.
     """
+    window = int(window | 1)  # force odd
     if gray.size == 0:
         return gray.copy()
     
@@ -132,7 +133,12 @@ def preprocess(bgr_img: np.ndarray,
     """
     gray = to_gray(bgr_img)
     corrected = illumination_correct(gray, method=illum_method, frac=illum_frac)
+    # Boost local contrast for faint strokes
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    corrected = clahe.apply(corrected)
     if do_deskew:
         corrected, _ = deskew_small(corrected, max_angle=5.0, border_value=255)
     bw = binarize_sauvola(corrected, window=sauvola_window, k=sauvola_k)
+    # Light denoise without harming thin strokes
+    bw = cv2.morphologyEx(bw, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
     return bw

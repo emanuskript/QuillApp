@@ -133,7 +133,7 @@ def _hog_orient_hist(
 def hog_hist(
     img: np.ndarray,
     orientations: int = 9,
-    pixels_per_cell: Tuple[int, int] = (16, 16),
+    pixels_per_cell: Tuple[int, int] = (8, 8),
     cells_per_block: Tuple[int, int] = (2, 2),
     transform_sqrt: bool = True,
     block_norm: str = "L2-Hys",
@@ -193,15 +193,15 @@ def line_embedding(
     line_img: np.ndarray,
     central_band_frac: Optional[float] = 0.6,
     central_band_pad: int = 2,
-    resize_height: int = 128,
+    resize_height: int = 144,
     use_color: bool = True,
     w_lbp: float = 1.0,
-    w_hog: float = 1.0,
-    w_color: float = 0.5,
+    w_hog: float = 1.2,
+    w_color: float = 0.25,
     lbp_P: int = 8,
     lbp_R: int = 1,
     hog_orientations: int = 9,
-    hog_pixels_per_cell: Tuple[int, int] = (16, 16),
+    hog_pixels_per_cell: Tuple[int, int] = (8, 8),
     hog_cells_per_block: Tuple[int, int] = (2, 2),
 ) -> np.ndarray:
     # Central band (same for gray & color)

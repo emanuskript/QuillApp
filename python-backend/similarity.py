@@ -197,7 +197,7 @@ def _sort_by_num(paths: List[str]) -> List[str]:
 class ImageProcessor:
     def __init__(self,
                  metric="cosine",
-                 smooth_win=5,
+                 smooth_win=4,
                  z_method="mad",
                  z_thresh: Optional[float]=None,
                  min_gap=2,
@@ -259,6 +259,96 @@ class ImageProcessor:
             "v_std": float(cstats[4]),
         }
 
+    def _segment_runs_from_labels(self, labels):
+        runs = []
+        start = 0
+        for i in range(1, len(labels)):
+            if labels[i] != labels[i-1]:
+                runs.append((start, i))
+                start = i
+        runs.append((start, len(labels)))
+        return runs
+
+    def _cluster_fallback_segments(self, X):
+        """
+        Contiguity-aware clustering fallback:
+          - tries K = 2..min(5, N)
+          - Agglomerative clustering with contiguous linkage
+          - chooses best K by silhouette; requires improvement over 1 cluster
+        Returns: (segments, boundaries_conf) or ([], [])
+        """
+        try:
+            from sklearn.cluster import AgglomerativeClustering
+            from sklearn.metrics import silhouette_score
+            import numpy as np
+        except Exception:
+            return [], []
+
+        n = X.shape[0]
+        if n < 3:
+            return [], []
+
+        # Build a simple 1-D connectivity (chain). If scipy.sparse is missing,
+        # pass None; agglomerative still works but may split non-contiguously.
+        conn = None
+        try:
+            from scipy.sparse import coo_matrix
+            rows = []
+            cols = []
+            data = []
+            for i in range(n - 1):
+                rows += [i, i + 1]
+                cols += [i + 1, i]
+                data += [1, 1]
+            conn = coo_matrix((data, (rows, cols)), shape=(n, n))
+        except Exception:
+            conn = None
+
+        best = None
+        best_score = -1.0
+        max_k = min(5, n)
+        for k in range(2, max_k + 1):
+            model = AgglomerativeClustering(
+                n_clusters=k, linkage="ward", connectivity=conn
+            )
+            labels = model.fit_predict(X)
+            # enforce contiguity: convert to runs
+            runs = self._segment_runs_from_labels(labels)
+            if len(runs) < 2:
+                continue
+            # score by silhouette on original embeddings
+            try:
+                score = silhouette_score(X, labels, metric="euclidean")
+            except Exception:
+                score = 0.0
+            if score > best_score:
+                best = (runs, labels)
+                best_score = score
+
+        if best is None or best_score < 0.05:  # require minimal separation
+            return [], []
+
+        runs, labels = best
+        # build boundary confidences from centroid separations
+        boundaries = []
+        confs = []
+        for i in range(len(runs) - 1):
+            a0, a1 = runs[i]
+            b0, b1 = runs[i + 1]
+            ca = X[a0:a1].mean(axis=0)
+            cb = X[b0:b1].mean(axis=0)
+            dot = float(np.dot(ca, cb))
+            na = float(np.linalg.norm(ca) + 1e-12)
+            nb = float(np.linalg.norm(cb) + 1e-12)
+            cos_sep = 1.0 - dot / (na * nb)  # 0=same, 2=opposite
+            # map separation to (0,1) smoothly; no magic 0.85 default
+            conf = 1.0 / (1.0 + np.exp(-(cos_sep - 0.15) * 12.0))
+            boundaries.append(a1 - 1)   # boundary index between a and b (line i / i+1)
+            confs.append(float(conf))
+
+        segments = runs
+        return segments, list(zip(boundaries, confs))
+
     def detect_with_reasons(self, line_paths: List[str]) -> Dict[str, object]:
         if not line_paths: return {"changes": [], "z": [], "dist": []}
         # read + embed
@@ -300,7 +390,10 @@ class ImageProcessor:
             if not _HAS_RUPTURES or smooth_dist.size < 3:
                 return []
             # Use PELT on 1D with L2; choose a mild penalty if none provided
-            pen = float(self.ruptures_pen) if self.ruptures_pen is not None else max(2.0, 2.0*np.log(len(smooth_dist)))
+            n = len(smooth_dist)
+            # gentler default penalty; scales sub-linearly with n
+            pen = (float(self.ruptures_pen) if self.ruptures_pen is not None
+                   else max(1.2, 1.1 * np.sqrt(max(n, 1))))
             algo = rpt.Pelt(model="l2").fit(smooth_dist.reshape(-1, 1))
             try:
                 bkps = algo.predict(pen=pen)  # 1-based ends, includes len
@@ -317,24 +410,29 @@ class ImageProcessor:
             return kept
 
         use_peaks = (self.algo in ("auto", "peaks"))
-        use_rupt = (self.algo in ("auto", "ruptures"))
+        use_rupt  = (self.algo in ("auto", "ruptures"))
 
         # Always compute a baseline dist/z (used for confidence either way)
         _, dist, z = _peaks_method(self.z_thresh if self.z_thresh is not None else 2.0)
 
+        cand = set()
         if use_peaks:
             if self.z_thresh is None:
-                for t in (2.5, 2.2, 2.0, 1.8, 1.6, 1.4):
+                for t in (2.4, 2.2, 2.0, 1.8, 1.6, 1.4):
                     peaks, dist_tmp, z_tmp = _peaks_method(t)
-                    if len(peaks) >= 1:
-                        change_idxs = peaks; dist = dist_tmp; z = z_tmp; break
+                    cand.update(peaks)
+                    if len(cand) >= 1:
+                        dist, z = dist_tmp, z_tmp
+                        break
             else:
-                change_idxs, dist, z = _peaks_method(self.z_thresh)
+                peaks, dist_tmp, z_tmp = _peaks_method(self.z_thresh)
+                cand.update(peaks); dist, z = dist_tmp, z_tmp
 
-        if use_rupt and (not change_idxs):
-            # run ruptures on smoothed distance if peaks found none
+        if use_rupt:
             smooth_dist = _smooth(consecutive_distances(X, metric=self.metric), win=self.smooth_win)
-            change_idxs = _ruptures_method(smooth_dist)
+            cand.update(_ruptures_method(smooth_dist))
+
+        change_idxs = sorted(cand)
 
         # Enforce min_gap across any change_idxs we have
         final_changes: List[int] = []
@@ -342,16 +440,42 @@ class ImageProcessor:
             if not final_changes or (i - final_changes[-1]) >= self.min_gap:
                 final_changes.append(i)
 
+        # Default segments from peaks/ruptures
+        segments = indices_to_segments(len(imgs), final_changes) if len(imgs) else []
+
         changes = []
         for i in final_changes:
             if 0 <= i < len(imgs) - 1:
-                # confidence from z: squash with sigmoid around z=2.0
-                conf = _sigmoid(float(z[i] - 2.0))  # ~0.88 at z=2, ~0.95 at z=3
-                # explanations
+                # build a percentile-based confidence from the whole distance field
+                all_d = consecutive_distances(X, metric=self.metric)
+                if all_d.size >= 3:
+                    base = np.sort(all_d)
+                    # percentile of this boundary's distance among all boundaries
+                    pct = float(np.searchsorted(base, dist[i], side="right")) / float(len(base))
+                    # sharpen mapping; avoids flat ~0.85 values
+                    conf = float(1.0 / (1.0 + np.exp(- (pct - 0.5) * 6.0)))
+                else:
+                    # fallback to z only if too few samples
+                    conf = float(1.0 / (1.0 + np.exp(-(z[i] - 2.0))))
                 a, b = diags[i], diags[i+1]
-                # texture dissimilarity via chi² on LBP
                 a["lbp_chi2"] = _chi2(a["lbp"], b["lbp"])
                 reason = _reason_from_diffs(a, b)
                 changes.append({"index": int(i), "confidence": float(conf), "reason": reason})
 
-        return {"changes": changes, "z": z.tolist(), "dist": dist.tolist()}
+        # Fallback: contiguous clustering if we found no boundaries
+        if not changes:
+            segs, boundary_confs = self._cluster_fallback_segments(X)
+            if segs:
+                segments = segs
+                for b_idx, conf in boundary_confs:
+                    i = int(b_idx)
+                    if 0 <= i < len(imgs) - 1:
+                        a, b = diags[i], diags[i+1]
+                        a["lbp_chi2"] = _chi2(a["lbp"], b["lbp"])
+                        reason = _reason_from_diffs(a, b)
+                        changes.append({"index": i, "confidence": float(conf), "reason": reason})
+
+        return {"changes": changes,
+                "segments": segments,
+                "z": z.tolist(),
+                "dist": dist.tolist()}

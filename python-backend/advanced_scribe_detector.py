@@ -198,9 +198,11 @@ class AdvancedScribeDetector:
         """Analyze writing slant angle and consistency"""
         binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
         
-        # Find vertical strokes using morphological operations
+        # Thinning to remove width bias
+        vertical_strokes = cv2.ximgproc.thinning(binary) if hasattr(cv2, "ximgproc") else binary
+        # Emphasize near-vertical structures
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 5))
-        vertical_strokes = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        vertical_strokes = cv2.morphologyEx(vertical_strokes, cv2.MORPH_OPEN, kernel)
         
         # Find lines using HoughLines
         lines = cv2.HoughLines(vertical_strokes, 1, np.pi/180, threshold=20)
