@@ -31,7 +31,7 @@ MAX_CONTENT_LENGTH = 20 * 1024 * 1024  # 20MB
 
 # heuristics for cropping lines
 MIN_LINE_WIDTH = 150
-MAX_LINE_HEIGHT = 350
+MAX_LINE_HEIGHT = 800  # Increased to allow larger line segments
 
 JOB_TTL_SEC = 6 * 60 * 60  # cleanup old jobs after 6h
 
@@ -97,15 +97,19 @@ def segment_lines(img_path: Path) -> List[Dict]:
     H, W = img.shape[:2]
     
     # Check if any lines were detected
+    print(f"LineSegmentor detected {len(segmentor.lines_boundaries) if segmentor.lines_boundaries else 0} line boundaries")
     if not segmentor.lines_boundaries:
         # If no lines detected, treat entire image as one line
+        print(f"No line boundaries detected, using entire image as one line: {W}x{H}")
         lines.append({
             "id": "line_0",
             "boundary": [[0, 0], [W-1, 0], [W-1, H-1], [0, H-1]],
             "bbox": [0, 0, W-1, H-1]
         })
     else:
+        print(f"Processing {len(segmentor.lines_boundaries)} detected line boundaries:")
         for i, boundary_tuple in enumerate(segmentor.lines_boundaries):
+            print(f"  Line {i}: boundary_tuple = {boundary_tuple}")
             # Ensure we have exactly 4 values
             if len(boundary_tuple) != 4:
                 continue
@@ -137,16 +141,26 @@ def crop_lines(img_path: Path, lines: List[Dict], out_dir: Path) -> Tuple[List[s
     idx = 1
     for ln in lines:
         boundary = ln.get("boundary")
-        if not boundary or not isinstance(boundary, list) or len(boundary) < 2: continue
+        if not boundary or not isinstance(boundary, list) or len(boundary) < 2: 
+            print(f"Line {idx}: Skipping - invalid boundary: {boundary}")
+            continue
         xs = [pt[0] for pt in boundary]; ys = [pt[1] for pt in boundary]
         x0, y0, x1, y1 = clamp_bbox(min(xs), min(ys), max(xs), max(ys), W, H)
         crop = img[y0:y1, x0:x1]
-        if crop.size == 0: continue
+        if crop.size == 0: 
+            print(f"Line {idx}: Skipping - empty crop")
+            continue
         
         h, w = crop.shape[:2]
-        if w < MIN_LINE_WIDTH: continue
-        if h > MAX_LINE_HEIGHT: continue
+        print(f"Line {idx}: dimensions w={w}, h={h} (MIN_WIDTH={MIN_LINE_WIDTH}, MAX_HEIGHT={MAX_LINE_HEIGHT})")
+        if w < MIN_LINE_WIDTH: 
+            print(f"Line {idx}: Skipping - width {w} < {MIN_LINE_WIDTH}")
+            continue
+        if h > MAX_LINE_HEIGHT: 
+            print(f"Line {idx}: Skipping - height {h} > {MAX_LINE_HEIGHT}")
+            continue
 
+        print(f"Line {idx}: Accepted - saving as line_{idx}.jpg")
         out_name = f"line_{idx}.jpg"
         cv2.imwrite(str(out_dir / out_name), crop)
         rel_paths.append(str((out_dir / out_name).relative_to(STATIC_DIR)).replace("\\", "/"))

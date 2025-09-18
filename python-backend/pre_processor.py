@@ -73,7 +73,12 @@ def _estimate_small_skew_angle(gray: np.ndarray, max_angle: float = 5.0) -> floa
         return 0.0
     
     angles = []
-    for rho, theta in lines[:50]:  # consider first 50 lines
+    for line in lines[:50]:  # consider first 50 lines
+        # Handle both formats: [[rho, theta]] and [rho, theta]
+        if isinstance(line, np.ndarray) and line.ndim > 1:
+            rho, theta = line[0]  # nested format [[rho, theta]]
+        else:
+            rho, theta = line  # flat format [rho, theta]
         angle_deg = (theta - np.pi/2) * 180 / np.pi
         if abs(angle_deg) <= max_angle:
             angles.append(angle_deg)
