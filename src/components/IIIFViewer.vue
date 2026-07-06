@@ -351,6 +351,7 @@
           class="length-measurement"
           :class="{
             'annotation-interactive': !isAnyToolActive,
+            'band-selected': isBandSelectedForResize(measurement),
             'annotation-flash': isAnnotationFlashing('length', measurement)
           }"
           :style="{
@@ -366,6 +367,8 @@
           @pointerenter="showAnnotationTooltip('length', measurement, index, $event)"
           @pointermove="moveAnnotationTooltip($event)"
           @pointerleave="hideAnnotationTooltip"
+          @pointerdown.stop="selectBandForResize(measurement)"
+          @click.stop="selectBandForResize(measurement)"
         >
           <div
             class="length-label draggable-label"
@@ -387,6 +390,18 @@
                 : measurement.width)
             }}
           </div>
+
+          <template v-if="isBandSelectedForResize(measurement) && !isAnyToolActive">
+            <button
+              v-for="corner in bandResizeCorners"
+              :key="corner"
+              type="button"
+              class="band-resize-handle"
+              :class="`band-resize-handle--${corner}`"
+              :aria-label="`Resize ${camelToTitle(measurement.label)} from ${corner} corner`"
+              @pointerdown.stop.prevent="startBandResize(measurement, corner, $event)"
+            />
+          </template>
         </div>
 
         <!-- Draggable angle labels -->
@@ -1418,6 +1433,10 @@ export default {
         externalMargin: {},
       },
       labelPositions: {}, // for length labels drag
+      selectedBandId: null,
+      selectedBandRef: null,
+      bandResizeState: null,
+      bandResizeCorners: ['nw', 'ne', 'se', 'sw'],
       angleLabelPositions: {}, // for angle labels drag
       angleContextMenu: {
         visible: false,
@@ -2241,6 +2260,11 @@ export default {
     };
     window.addEventListener('keydown', this._angleMoveKeyDown);
     document.addEventListener('mousedown', this._angleMoveOutsideClick, true);
+    this._bandResizeOutsidePointerDown = (event) => {
+      if (event.target?.closest?.('.length-measurement, .band-resize-handle')) return;
+      this.clearBandResizeSelection();
+    };
+    document.addEventListener('pointerdown', this._bandResizeOutsidePointerDown, true);
   },
 
   beforeUnmount() {
@@ -2294,8 +2318,17 @@ export default {
     if (this._angleMoveOutsideClick) {
       document.removeEventListener('mousedown', this._angleMoveOutsideClick, true);
     }
+    if (this._bandResizeOutsidePointerDown) {
+      document.removeEventListener('pointerdown', this._bandResizeOutsidePointerDown, true);
+    }
+    window.removeEventListener('pointermove', this.resizeSelectedBand);
+    window.removeEventListener('pointerup', this.finishBandResize);
+    window.removeEventListener('pointercancel', this.finishBandResize);
     if (this._angleMovePersistTimer) {
       clearTimeout(this._angleMovePersistTimer);
+    }
+    if (this._bandResizePersistTimer) {
+      clearTimeout(this._bandResizePersistTimer);
     }
     if (this._annotationFlashTimer) {
       clearTimeout(this._annotationFlashTimer);
@@ -3522,6 +3555,103 @@ export default {
         color: band.color || this.measurementColorFor(label),
       };
     },
+    isBandSelectedForResize(measurement) {
+      if (!measurement) return false;
+      return measurement.id
+        ? measurement.id === this.selectedBandId
+        : measurement === this.selectedBandRef;
+    },
+    selectBandForResize(measurement) {
+      if (!measurement || this.isAnyToolActive) return;
+      this.selectedBandId = measurement.id || null;
+      this.selectedBandRef = measurement.id ? null : measurement;
+      this.hideAnnotationTooltip();
+    },
+    clearBandResizeSelection() {
+      if (this.bandResizeState) return;
+      this.selectedBandId = null;
+      this.selectedBandRef = null;
+    },
+    startBandResize(measurement, corner, event) {
+      if (!measurement || this.isAnyToolActive || !this.bandResizeCorners.includes(corner)) return;
+      this.selectBandForResize(measurement);
+
+      const x = Number(measurement.x) || 0;
+      const y = Number(measurement.y) || 0;
+      const width = Math.max(1, Number(measurement.width) || 0);
+      const height = Math.max(1, Number(measurement.height) || 0);
+      this.bandResizeState = {
+        measurement,
+        corner,
+        pageIndex: this.currentPage,
+        fixedX: corner.includes('w') ? x + width : x,
+        fixedY: corner.includes('n') ? y + height : y,
+      };
+
+      event.currentTarget?.setPointerCapture?.(event.pointerId);
+      this.setOsdMouseNavEnabled(false);
+      window.addEventListener('pointermove', this.resizeSelectedBand);
+      window.addEventListener('pointerup', this.finishBandResize, { once: true });
+      window.addEventListener('pointercancel', this.finishBandResize, { once: true });
+    },
+    resizeSelectedBand(event) {
+      const state = this.bandResizeState;
+      if (!state) return;
+      event.preventDefault();
+
+      const pointer = this.getMousePosition(event);
+      const imageWidth = Number(this.osdImageWidth) || Number.MAX_SAFE_INTEGER;
+      const imageHeight = Number(this.osdImageHeight) || Number.MAX_SAFE_INTEGER;
+      const draggedX = Math.max(0, Math.min(imageWidth, pointer.x));
+      const draggedY = Math.max(0, Math.min(imageHeight, pointer.y));
+      const minSize = 1;
+
+      let x = Math.min(draggedX, state.fixedX);
+      let y = Math.min(draggedY, state.fixedY);
+      let width = Math.abs(draggedX - state.fixedX);
+      let height = Math.abs(draggedY - state.fixedY);
+
+      if (width < minSize) {
+        width = minSize;
+        x = Math.max(0, Math.min(state.fixedX, imageWidth - minSize));
+      }
+      if (height < minSize) {
+        height = minSize;
+        y = Math.max(0, Math.min(state.fixedY, imageHeight - minSize));
+      }
+
+      Object.assign(state.measurement, { x, y, width, height });
+    },
+    finishBandResize() {
+      const state = this.bandResizeState;
+      if (!state) return;
+
+      window.removeEventListener('pointermove', this.resizeSelectedBand);
+      window.removeEventListener('pointerup', this.finishBandResize);
+      window.removeEventListener('pointercancel', this.finishBandResize);
+      this.bandResizeState = null;
+      this.setOsdMouseNavEnabled(true);
+
+      const { measurement, pageIndex } = state;
+      const updates = {
+        x: measurement.x,
+        y: measurement.y,
+        width: measurement.width,
+        height: measurement.height,
+      };
+      if (measurement.id && this.sessionConnected) {
+        const syncType = this.isHorizontalLabel(measurement.label) ? 'horizontalBands' : 'verticalBands';
+        this.syncUpdateAnnotation(syncType, measurement.id, updates, pageIndex);
+      } else if (this.activeSessionId) {
+        clearTimeout(this._bandResizePersistTimer);
+        this._bandResizePersistTimer = setTimeout(() => {
+          this.syncAllAnnotations(this.getAllAnnotations()).catch(error => {
+            console.error('Failed to persist band resize:', error);
+            this.showToolMessage('Band resized locally, but session sync failed.');
+          });
+        }, 250);
+      }
+    },
     generateRandomColor() {
       const palette = ["#E69F00","#56B4E9","#009E73","#F0E442","#0072B2","#D55E00","#CC79A7"];
       this._lastColor = this._lastColor || null;
@@ -3724,6 +3854,7 @@ export default {
 
     showPenSelection() {
       // Keep UI minimal: set trace active immediately (we already have angles/labels UI elsewhere)
+      this.resetAnnotationToolState();
       this.traceModeActive = true;
       this.showToolMessage("Trace mode active. Draw freehand on the page.");
     },
@@ -3762,12 +3893,9 @@ export default {
     },
     beginLength(type) {
       // choose a band type and stay in that mode until the same toolbar button is clicked again
-      this.selectedMeasurement = type;
-      this.hideLengthPopup();
-      this.startLengthMeasurement();
-      // remember which group is active (horizontal | vertical)
-      this.activeBandGroup = this.pendingBandGroup || this.activeBandGroup || 'horizontal';
-      const groupLabel = this.activeBandGroup === 'vertical' ? 'Vertical' : 'Horizontal';
+      const group = this.pendingBandGroup || this.activeBandGroup || 'horizontal';
+      this.startLengthMeasurement(type, group);
+      const groupLabel = group === 'vertical' ? 'Vertical' : 'Horizontal';
       this.showToolMessage(`${groupLabel} "${type}" measuring is ACTIVE. Click the ${groupLabel} Bands button again to exit.`);
     },
 
@@ -3793,8 +3921,8 @@ export default {
       if (!this.angleLabels.includes(label)) {
         this.angleLabels.push(label);
       }
+      this.resetAnnotationToolState();
       this.activeAngleLabel = label;
-      this.showAngleLabelPopup = false;
       this.measureModeActive = true;
       this.showToolMessage(`Angle measure: label "${label}". Click 3 points (A, vertex, B).`);
     },
@@ -3812,9 +3940,9 @@ export default {
         this.showToolMessage("Choose or create a label first.");
         return;
       }
-      
-      // Normal flow: close popup and activate measure mode
-      this.showAngleLabelPopup = false;
+
+      // Every activation starts from the same exclusive baseline.
+      this.resetAnnotationToolState();
       this.measureModeActive = true;
       this.showToolMessage(`Angle measure: label "${this.activeAngleLabel}". Click 3 points (A, vertex, B).`);
     },
@@ -3826,13 +3954,13 @@ export default {
       this.angleSnapGuide = null;
     },
 
-    confirmPenSelection() {
+confirmPenSelection() {
   const size = this.penSizes.find(s => s.key === this.selectedPenSize) || this.penSizes[1];
   this.penWidth  = size.w;
   this.penHeight = size.h;
   this.currentNibAngle = this.selectedPenAngle;
 
-  this.showTracePopup = false;
+  this.resetAnnotationToolState();
   this.traceModeActive = true;
   this.showToolMessage(`Trace: ${size.label} nib at ${this.currentNibAngle}°`);
 },
@@ -3887,7 +4015,13 @@ cancelPenSelection() {
     },
 
     /* ---------- Length measurement ---------- */
-    startLengthMeasurement() {
+    startLengthMeasurement(type = this.selectedMeasurement, group = this.activeBandGroup || 'horizontal') {
+      // This is the canonical band activation path. Reset first so a band can
+      // never coexist with underline, highlight, trace, angle, comment, crop,
+      // or move mode even if this method is called outside the toolbar flow.
+      this.resetAnnotationToolState();
+      this.selectedMeasurement = type;
+      this.activeBandGroup = group;
       this.lengthMeasurementActive = true;
       this.isMeasuring = true;
       this.showToolMessage(`Measuring "${this.selectedMeasurement}": click-start then click-end.`);
@@ -4117,6 +4251,7 @@ cancelPenSelection() {
       ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight","other_h"].forEach((t)=>{
         if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage];
       });
+      this.clearBandResizeSelection();
       this.showToolMessage("Horizontal lengths cleared.");
       this.showClearDropdown = false;
     },
@@ -4124,6 +4259,7 @@ cancelPenSelection() {
       ["internalMargin","intercolumnSpaces","externalMargin","other_v"].forEach((t)=>{
         if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage];
       });
+      this.clearBandResizeSelection();
       this.showToolMessage("Vertical lengths cleared.");
       this.showClearDropdown = false;
     },
@@ -4135,6 +4271,7 @@ cancelPenSelection() {
           const idx = pageArr.findIndex(m => String(m.id) === String(id));
           if (idx !== -1) {
             pageArr.splice(idx, 1);
+            if (String(this.selectedBandId) === String(id)) this.clearBandResizeSelection();
             this.showToolMessage("Measurement deleted.");
             return;
           }
@@ -4151,6 +4288,7 @@ cancelPenSelection() {
       this.comments[this.currentPage] = [];
       const all = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","internalMargin","intercolumnSpaces","externalMargin","lineHeight","minimumHeight","other_h","other_v"];
       all.forEach(t => { if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage]; });
+      this.clearBandResizeSelection();
       this.strokes = [];
       this.measurePoints = [];
       this.calculatedAngle = 0;
@@ -5233,6 +5371,7 @@ cancelPenSelection() {
         this.showToolMessage("Please select items to move first.");
         return;
       }
+      this.resetAnnotationToolState();
       this.moveModeActive = true;
       this.showToolMessage("Move mode: drag on the image to reposition selected items.");
     },
@@ -6773,6 +6912,28 @@ cancelPenSelection() {
   pointer-events: none;
   box-sizing: border-box;
 }
+.length-measurement.band-selected {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
+  cursor: default;
+}
+.band-resize-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 2px solid hsl(var(--background));
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  box-shadow: 0 0 0 1px hsl(var(--primary)), 0 2px 5px rgb(0 0 0 / 0.3);
+  z-index: 500;
+  pointer-events: auto;
+  touch-action: none;
+}
+.band-resize-handle--nw { left: 0; top: 0; transform: translate(-50%, -50%); cursor: nwse-resize; }
+.band-resize-handle--ne { right: 0; top: 0; transform: translate(50%, -50%); cursor: nesw-resize; }
+.band-resize-handle--se { right: 0; bottom: 0; transform: translate(50%, 50%); cursor: nwse-resize; }
+.band-resize-handle--sw { left: 0; bottom: 0; transform: translate(-50%, 50%); cursor: nesw-resize; }
 .length-label {
   position: absolute; left: 15px; top: 15px; transform: translateY(0);
   color: hsl(var(--foreground)); font-size: 12px; background-color: hsl(var(--card)); padding: 2px 5px; border-radius: 3px;
