@@ -335,7 +335,7 @@
               pointerEvents: 'none',
             }"
           >
-            {{ currentSquare.label }}:
+            {{ camelToTitle(currentSquare.label) }}:
             {{
               formatMeasurement(isHorizontalLabel(currentSquare.label)
                 ? currentSquare.height
@@ -380,7 +380,7 @@
             }"
             @mousedown.stop="startLabelDrag(measurement.id, $event)"
           >
-            {{ measurement.label }}:
+            {{ camelToTitle(measurement.label) }}:
             {{
               formatMeasurement(isHorizontalLabel(measurement.label)
                 ? measurement.height
@@ -1475,6 +1475,7 @@ export default {
       moveModeActive: false,
       moveStartPos: null,
       currentMoveDelta: { x: 0, y: 0 },
+      annotationSequence: 0,
 
       // OpenSeadragon state
       osdViewer: null,       // OpenSeadragon instance
@@ -1592,66 +1593,62 @@ export default {
     // All annotations for right panel
     currentPageAnnotationsList() {
       const list = [];
-
-      // Highlights
-      if (this.currentPageHighlights) {
-        this.currentPageHighlights.forEach((h, i) => {
-          list.push({ type: 'highlight', label: this.getAnnotationBankLabel('highlight', h, i), data: h, index: i });
+      let fallbackOrder = 0;
+      const typeIndexes = { highlight: 0, underline: 0, trace: 0, angle: 0 };
+      const addItem = (item, annotation) => {
+        list.push({
+          ...item,
+          _chronology: this.annotationChronology(annotation),
+          _fallbackOrder: fallbackOrder++,
         });
-      }
+      };
 
-      // Underlines
-      if (this.currentPageUnderlines) {
-        this.currentPageUnderlines.forEach((u, i) => {
-          list.push({ type: 'underline', label: this.getAnnotationBankLabel('underline', u, i), data: u, index: i });
-        });
-      }
+      // annotationsByPage already preserves insertion order. Keep that order here
+      // instead of rebuilding the bank in type-specific groups.
+      (this.annotationsByPage[this.currentPage] || []).forEach(annotation => {
+        const bankType = annotation.type === 'measure' ? 'angle' : annotation.type;
+        if (!Object.prototype.hasOwnProperty.call(typeIndexes, bankType)) return;
+        const index = typeIndexes[bankType]++;
+        addItem({
+          type: bankType,
+          label: this.getAnnotationBankLabel(bankType, annotation, index),
+          data: annotation,
+          index,
+        }, annotation);
+      });
 
-      // Traces
-      if (this.currentPageStrokes) {
-        this.currentPageStrokes.forEach((s, i) => {
-          list.push({ type: 'trace', label: this.getAnnotationBankLabel('trace', s, i), data: s, index: i });
-        });
-      }
-
-      // Comments
-      if (this.currentPageComments) {
-        this.currentPageComments.forEach((c, i) => {
-          list.push({
-            type: 'comment',
-            label: this.getAnnotationBankLabel('comment', c, i),
-            data: c,
-            index: i
-          });
-        });
-      }
-
-      // Angles
-      if (this.currentPageAngles) {
-        this.currentPageAngles.forEach((a, i) => {
-          list.push({
-            type: 'angle',
-            label: this.getAnnotationBankLabel('angle', a, i),
-            data: a,
-            index: i
-          });
-        });
-      }
+      (this.currentPageComments || []).forEach((comment, index) => {
+        addItem({
+          type: 'comment',
+          label: this.getAnnotationBankLabel('comment', comment, index),
+          data: comment,
+          index,
+        }, comment);
+      });
 
       // Length measurements
       if (this.currentPageLengthMeasurements) {
         this.currentPageLengthMeasurements.forEach((m) => {
           const isHorizontal = ['ascenders', 'descenders', 'interlinear', 'upperMargin', 'lowerMargin', 'lineHeight', 'minimumHeight', 'other_h'].includes(m.label);
-          list.push({
+          addItem({
             type: isHorizontal ? 'length-h' : 'length-v',
             label: this.getAnnotationBankLabel(isHorizontal ? 'length-h' : 'length-v', m),
             data: m,
             id: m.id
-          });
+          }, m);
         });
       }
 
-      return list;
+      return list
+        .sort((a, b) => {
+          if (a._chronology === 0 && b._chronology === 0) {
+            return a._fallbackOrder - b._fallbackOrder;
+          }
+          if (a._chronology === 0) return -1;
+          if (b._chronology === 0) return 1;
+          return a._chronology - b._chronology || a._fallbackOrder - b._fallbackOrder;
+        })
+        .map(({ _chronology, _fallbackOrder, ...item }) => item);
     },
 
     imageReady() {
@@ -2311,6 +2308,22 @@ export default {
   methods: {
     // Make calligraphic path generator available in template
     generateCalligraphicPath,
+    nextAnnotationOrder() {
+      this.annotationSequence = Math.max(this.annotationSequence + 1, Date.now() * 1000);
+      return this.annotationSequence;
+    },
+    creationMetadata() {
+      return {
+        createdAt: new Date().toISOString(),
+        createdOrder: this.nextAnnotationOrder(),
+      };
+    },
+    annotationChronology(annotation) {
+      const createdOrder = Number(annotation?.createdOrder);
+      if (Number.isFinite(createdOrder) && createdOrder > 0) return createdOrder;
+      const createdAt = Date.parse(annotation?.createdAt);
+      return Number.isFinite(createdAt) ? createdAt * 1000 : 0;
+    },
     async _readResponsePayload(response) {
       const text = await response.text();
       if (!text) return {};
@@ -2485,7 +2498,9 @@ export default {
       if (normalizedType === 'angle') {
         return `${annotation?.angle}°${annotation?.label ? ' - ' + annotation.label : ''}`;
       }
-      if (normalizedType === 'length') return annotation?.label || `Length ${index + 1}`;
+      if (normalizedType === 'length') {
+        return annotation?.label ? this.camelToTitle(annotation.label) : `Length ${index + 1}`;
+      }
       return `Annotation ${index + 1}`;
     },
 
@@ -3532,8 +3547,8 @@ export default {
     /* ----- Bank helpers ----- */
     camelToTitle(key) {
       if (!key) return "";
-      // Special case for minimumHeight
-      if (key === "minimumHeight") return "Minim height";
+      // Keep the historical data key while using the domain term in the UI.
+      if (key === "minimumHeight") return "Minim";
       return key
         .replace(/([a-z])([A-Z])/g, "$1 $2")
         .replace(/^./, (s) => s.toUpperCase());
@@ -3957,6 +3972,7 @@ cancelPenSelection() {
 
       const comment = {
         id: safeUUID(),
+        ...this.creationMetadata(),
         pageIndex: this.currentPage,
         x: this._composerImageCoords.x,
         y: this._composerImageCoords.y,
@@ -4815,6 +4831,7 @@ cancelPenSelection() {
             ...this.currentSquare,
             type: "length",
             id: safeUUID(),
+            ...this.creationMetadata(),
             pageIndex: this.currentPage,
             label,
             createdBy: this.localParticipant?.id || null,
@@ -4892,6 +4909,7 @@ cancelPenSelection() {
           }
           const measure = {
             id: safeUUID(),
+            ...this.creationMetadata(),
             type: "measure",
             pageIndex: this.currentPage,
             points: [...this.measurePoints],
@@ -5091,6 +5109,7 @@ cancelPenSelection() {
         const trace = {
           type: "trace",
           id: safeUUID(),
+          ...this.creationMetadata(),
           pageIndex: this.currentPage,
           points: this.currentStroke.points,
           color: this.currentStroke.color,
@@ -5134,6 +5153,7 @@ cancelPenSelection() {
         if (this.highlightModeActive && this.currentSquare) {
           const highlight = {
             id: safeUUID(),
+            ...this.creationMetadata(),
             type: "highlight",
             pageIndex: this.currentPage,
             ...this.currentSquare,
@@ -5147,6 +5167,7 @@ cancelPenSelection() {
         } else if (this.underlineModeActive && this.currentUnderline) {
           const underline = {
             id: safeUUID(),
+            ...this.creationMetadata(),
             type: "underline",
             pageIndex: this.currentPage,
             ...this.currentUnderline,
@@ -5652,6 +5673,7 @@ cancelPenSelection() {
       });
       const baseFields = () => ({
         id: safeUUID(),
+        ...this.creationMetadata(),
         pageIndex,
         createdBy: this.localParticipant?.id || null,
       });

@@ -136,7 +136,7 @@ export default {
         upperMargin: "Upper Margin",
         lowerMargin: "Lower Margin",
         lineHeight: "Line Height",
-        minimumHeight: "Minimum Height",
+        minimumHeight: "Minim",
         internalMargin: "Internal Margin",
         intercolumnSpaces: "Intercolumn Spaces",
       };

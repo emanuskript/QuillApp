@@ -1985,7 +1985,7 @@ export default {
   position: fixed; inset: 0;
   background: hsl(var(--foreground) / 0.35);
   display:flex; align-items:center; justify-content:center;
-  z-index: var(--z-modal, 500);
+  z-index: 100000;
 }
 .scribe-card{
   position: relative;
