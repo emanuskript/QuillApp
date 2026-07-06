@@ -47,7 +47,7 @@
       <ViewerToolbar
         :active-tool="currentActiveTool"
         :has-active-filters="hasActiveFilters"
-        :is-operation-in-progress="isOperationInProgress"
+        :is-operation-in-progress="toolSwitchLocked"
         @select-tool="selectTool"
         @toggle-adjustments="toggleAdjustmentsPanel"
         @open-horizontal="openHorizontalPopup"
@@ -120,9 +120,18 @@
           <path
             v-for="(stroke, index) in currentPageStrokes"
             :key="'stroke-' + index"
+            class="annotation-trace"
+            :class="{
+              'annotation-interactive': !isAnyToolActive,
+              'annotation-flash': isAnnotationFlashing('trace', stroke)
+            }"
             :d="generateCalligraphicPath(stroke.points, stroke.penWidth, stroke.penHeight, stroke.nibAngle)"
             :fill="stroke.color"
             stroke="none"
+            :aria-label="getAnnotationBankLabel('trace', stroke, index)"
+            @pointerenter="showAnnotationTooltip('trace', stroke, index, $event)"
+            @pointermove="moveAnnotationTooltip($event)"
+            @pointerleave="hideAnnotationTooltip"
           />
           <!-- Angle Construction Guides -->
           <g v-if="measureModeActive && angleGuideMousePos">
@@ -237,9 +246,16 @@
             v-for="(annotation, index) in currentPageAngles"
             :key="'angle-' + index"
             class="saved-angle-group"
-            :class="{ 'is-keyboard-selected': isAngleSelectedForKeyboardMove(annotation) }"
+            :class="{
+              'is-keyboard-selected': isAngleSelectedForKeyboardMove(annotation),
+              'annotation-flash': isAnnotationFlashing('angle', annotation)
+            }"
             @click.stop="selectAngleForKeyboardMove(annotation)"
             @contextmenu.prevent.stop="openAngleContextMenu(annotation, $event)"
+            :aria-label="getAnnotationBankLabel('angle', annotation, index)"
+            @pointerenter="showAnnotationTooltip('angle', annotation, index, $event)"
+            @pointermove="moveAnnotationTooltip($event)"
+            @pointerleave="hideAnnotationTooltip"
           >
             <line
               v-if="annotation.type === 'measure' && annotation.points.length >= 2"
@@ -333,6 +349,10 @@
           v-for="(measurement, index) in currentPageLengthMeasurements"
           :key="'length-' + index"
           class="length-measurement"
+          :class="{
+            'annotation-interactive': !isAnyToolActive,
+            'annotation-flash': isAnnotationFlashing('length', measurement)
+          }"
           :style="{
             left: `${(measurement.x / osdImageWidth) * 100}%`,
             top: `${(measurement.y / osdImageHeight) * 100}%`,
@@ -342,6 +362,10 @@
             border: `2px solid ${measurementBorderFor(measurement)}`,
             position: 'absolute',
           }"
+          :title="getAnnotationBankLabel('length', measurement, index)"
+          @pointerenter="showAnnotationTooltip('length', measurement, index, $event)"
+          @pointermove="moveAnnotationTooltip($event)"
+          @pointerleave="hideAnnotationTooltip"
         >
           <div
             class="length-label draggable-label"
@@ -380,7 +404,10 @@
         >
           <div
             class="angle-label draggable-label"
-            :class="{ 'is-keyboard-selected': isAngleSelectedForKeyboardMove(annotation) }"
+            :class="{
+              'is-keyboard-selected': isAngleSelectedForKeyboardMove(annotation),
+              'annotation-flash': isAnnotationFlashing('angle', annotation)
+            }"
             :style="{
               left: (angleLabelPositions[annotation.id]?.x ?? 10) + 'px',
               top: (angleLabelPositions[annotation.id]?.y ?? -30) + 'px',
@@ -393,6 +420,10 @@
             @mousedown.stop="startAngleLabelDrag(annotation.id, $event)"
             @click.stop="selectAngleForKeyboardMove(annotation)"
             @contextmenu.prevent.stop="openAngleContextMenu(annotation, $event)"
+            :title="getAnnotationBankLabel('angle', annotation, currentPageAngles.indexOf(annotation))"
+            @pointerenter="showAnnotationTooltip('angle', annotation, currentPageAngles.indexOf(annotation), $event)"
+            @pointermove="moveAnnotationTooltip($event)"
+            @pointerleave="hideAnnotationTooltip"
           >
             {{ annotation.angle }}°{{ annotation.label ? ' • ' + annotation.label : '' }}
           </div>
@@ -417,6 +448,10 @@
           v-for="(annotation, index) in currentPageUnderlines"
           :key="'underline-' + index"
           class="underline-line"
+          :class="{
+            'annotation-interactive': !isAnyToolActive,
+            'annotation-flash': isAnnotationFlashing('underline', annotation)
+          }"
           :style="{
             position: 'absolute',
             left: `${(annotation.x / osdImageWidth) * 100}%`,
@@ -425,6 +460,10 @@
             height: '2px',
             backgroundColor: 'red',
           }"
+          :title="getAnnotationBankLabel('underline', annotation, index)"
+          @pointerenter="showAnnotationTooltip('underline', annotation, index, $event)"
+          @pointermove="moveAnnotationTooltip($event)"
+          @pointerleave="hideAnnotationTooltip"
         ></div>
 
         <!-- Cropping rectangle - use percentage positioning -->
@@ -453,9 +492,29 @@
           v-for="(annotation, index) in currentPageHighlights"
           :key="'highlight-screen-' + (annotation.id || index)"
           class="highlight-rectangle"
+          :class="{
+            'annotation-interactive': !isAnyToolActive,
+            'annotation-flash': isAnnotationFlashing('highlight', annotation)
+          }"
           :style="getViewerRectStyle(annotation)"
+          :title="getAnnotationBankLabel('highlight', annotation, index)"
+          @pointerenter="showAnnotationTooltip('highlight', annotation, index, $event)"
+          @pointermove="moveAnnotationTooltip($event)"
+          @pointerleave="hideAnnotationTooltip"
         ></div>
 
+      </div>
+
+      <div
+        v-if="annotationHoverTooltip.visible"
+        class="annotation-hover-tooltip"
+        :style="{
+          left: `${annotationHoverTooltip.x}px`,
+          top: `${annotationHoverTooltip.y}px`
+        }"
+        role="tooltip"
+      >
+        {{ annotationHoverTooltip.label }}
       </div>
 
       <!-- Floating Scribe Detection Button -->
@@ -515,6 +574,7 @@
     <!-- Angle Label Picker Popup -->
     <!-- Angle Label Popup -->
     <AngleLabelPopup
+      v-if="showAngleLabelPopup"
       :visible="showAngleLabelPopup"
       :labels="angleLabels"
       :initial-label="activeAngleLabel"
@@ -1226,6 +1286,13 @@ export default {
       leftPanelCollapsed: false,
       rightPanelCollapsed: false,
       selectedAnnotationItem: null,
+      flashingAnnotation: null,
+      annotationHoverTooltip: {
+        visible: false,
+        label: '',
+        x: 0,
+        y: 0,
+      },
       documentName: 'IIIF Document',
 
       // Collaboration state
@@ -1442,6 +1509,7 @@ export default {
       _cPanStart: null,
       croppedBaseW: 0,
       croppedBaseH: 0,
+      croppedSourceRegion: null,
 
       // Unified cropped state
       croppedLive: {
@@ -1492,6 +1560,19 @@ export default {
              this.lengthMeasurementActive || this.croppingStarted || this.commentModeActive;
     },
 
+    toolSwitchLocked() {
+      if (!this.isOperationInProgress) return false;
+      return !!this.currentStroke ||
+             !!this.moveStartPos ||
+             this.draggingPoint !== -1 ||
+             (!!this.startPoint && (
+               !!this.currentSquare ||
+               !!this.currentUnderline ||
+               this.lengthMeasurementActive ||
+               this.croppingStarted
+             ));
+    },
+
     // Active tool for toolbar highlighting
     currentActiveTool() {
       if (this.traceModeActive) return 'trace';
@@ -1515,31 +1596,30 @@ export default {
       // Highlights
       if (this.currentPageHighlights) {
         this.currentPageHighlights.forEach((h, i) => {
-          list.push({ type: 'highlight', label: `Highlight ${i + 1}`, data: h, index: i });
+          list.push({ type: 'highlight', label: this.getAnnotationBankLabel('highlight', h, i), data: h, index: i });
         });
       }
 
       // Underlines
       if (this.currentPageUnderlines) {
         this.currentPageUnderlines.forEach((u, i) => {
-          list.push({ type: 'underline', label: `Underline ${i + 1}`, data: u, index: i });
+          list.push({ type: 'underline', label: this.getAnnotationBankLabel('underline', u, i), data: u, index: i });
         });
       }
 
       // Traces
       if (this.currentPageStrokes) {
         this.currentPageStrokes.forEach((s, i) => {
-          list.push({ type: 'trace', label: `Trace ${i + 1}`, data: s, index: i });
+          list.push({ type: 'trace', label: this.getAnnotationBankLabel('trace', s, i), data: s, index: i });
         });
       }
 
       // Comments
       if (this.currentPageComments) {
         this.currentPageComments.forEach((c, i) => {
-          const text = c.text || '';
           list.push({
             type: 'comment',
-            label: text.substring(0, 25) + (text.length > 25 ? '...' : '') || `Comment ${i + 1}`,
+            label: this.getAnnotationBankLabel('comment', c, i),
             data: c,
             index: i
           });
@@ -1551,7 +1631,7 @@ export default {
         this.currentPageAngles.forEach((a, i) => {
           list.push({
             type: 'angle',
-            label: `${a.angle}°${a.label ? ' - ' + a.label : ''}`,
+            label: this.getAnnotationBankLabel('angle', a, i),
             data: a,
             index: i
           });
@@ -1564,7 +1644,7 @@ export default {
           const isHorizontal = ['ascenders', 'descenders', 'interlinear', 'upperMargin', 'lowerMargin', 'lineHeight', 'minimumHeight', 'other_h'].includes(m.label);
           list.push({
             type: isHorizontal ? 'length-h' : 'length-v',
-            label: m.label,
+            label: this.getAnnotationBankLabel(isHorizontal ? 'length-h' : 'length-v', m),
             data: m,
             id: m.id
           });
@@ -1988,6 +2068,10 @@ export default {
       // Clear bank selections when page changes
       this.bankSelectedKeys = [];
       this.clearKeyboardMovingAngle();
+      clearTimeout(this._annotationFlashTimer);
+      this._annotationFlashTimer = null;
+      this.flashingAnnotation = null;
+      this.hideAnnotationTooltip();
       // Update adjustment page for per-page filters
       this.setAdjustmentPage(n);
       // Refresh comment overlays for the new page
@@ -2216,6 +2300,9 @@ export default {
     if (this._angleMovePersistTimer) {
       clearTimeout(this._angleMovePersistTimer);
     }
+    if (this._annotationFlashTimer) {
+      clearTimeout(this._annotationFlashTimer);
+    }
 
     // Clean up body class if component is destroyed while popup is open
     document.body.classList.remove('cropped-popup-active');
@@ -2377,7 +2464,90 @@ export default {
     // Right panel handlers
     handleSelectAnnotation(annotation) {
       this.selectedAnnotationItem = annotation;
-      // Future enhancement: scroll viewport to annotation location
+      this.flashBankAnnotation(annotation);
+    },
+
+    normalizeAnnotationDisplayType(type) {
+      if (type === 'measure') return 'angle';
+      if (type === 'length-h' || type === 'length-v') return 'length';
+      return type;
+    },
+
+    getAnnotationBankLabel(type, annotation, index = 0) {
+      const normalizedType = this.normalizeAnnotationDisplayType(type);
+      if (normalizedType === 'highlight') return `Highlight ${index + 1}`;
+      if (normalizedType === 'underline') return `Underline ${index + 1}`;
+      if (normalizedType === 'trace') return `Trace ${index + 1}`;
+      if (normalizedType === 'comment') {
+        const text = annotation?.text || '';
+        return text.substring(0, 25) + (text.length > 25 ? '...' : '') || `Comment ${index + 1}`;
+      }
+      if (normalizedType === 'angle') {
+        return `${annotation?.angle}°${annotation?.label ? ' - ' + annotation.label : ''}`;
+      }
+      if (normalizedType === 'length') return annotation?.label || `Length ${index + 1}`;
+      return `Annotation ${index + 1}`;
+    },
+
+    annotationMarker(type, annotation) {
+      return {
+        type: this.normalizeAnnotationDisplayType(type),
+        id: annotation?.id || null,
+        ref: annotation?.id ? null : annotation,
+        pageIndex: this.currentPage,
+      };
+    },
+
+    isAnnotationFlashing(type, annotation) {
+      const marker = this.flashingAnnotation;
+      if (!marker || marker.pageIndex !== this.currentPage) return false;
+      if (marker.type !== this.normalizeAnnotationDisplayType(type)) return false;
+      return annotation?.id ? marker.id === annotation.id : marker.ref === annotation;
+    },
+
+    flashBankAnnotation(item) {
+      if (!item?.data) return;
+      clearTimeout(this._annotationFlashTimer);
+      this.flashingAnnotation = this.annotationMarker(item.type, item.data);
+      if (this.normalizeAnnotationDisplayType(item.type) === 'comment') {
+        this.renderCommentOverlays();
+      }
+
+      this._annotationFlashTimer = setTimeout(() => {
+        this.flashingAnnotation = null;
+        this._annotationFlashTimer = null;
+        if (this.normalizeAnnotationDisplayType(item.type) === 'comment') {
+          this.renderCommentOverlays();
+        }
+      }, 3000);
+    },
+
+    showAnnotationTooltip(type, annotation, index, event) {
+      if (this.isAnyToolActive) return;
+      this.annotationHoverTooltip = {
+        visible: true,
+        label: this.getAnnotationBankLabel(type, annotation, index),
+        x: Math.min(event.clientX + 12, window.innerWidth - 220),
+        y: Math.min(event.clientY + 12, window.innerHeight - 44),
+      };
+    },
+
+    moveAnnotationTooltip(event) {
+      if (!this.annotationHoverTooltip.visible) return;
+      this.annotationHoverTooltip = {
+        ...this.annotationHoverTooltip,
+        x: Math.min(event.clientX + 12, window.innerWidth - 220),
+        y: Math.min(event.clientY + 12, window.innerHeight - 44),
+      };
+    },
+
+    hideAnnotationTooltip() {
+      this.annotationHoverTooltip = {
+        visible: false,
+        label: '',
+        x: 0,
+        y: 0,
+      };
     },
 
     handleDeleteAnnotation(annotation) {
@@ -3401,38 +3571,71 @@ export default {
     },
 
     /* ---------- Toolbar ---------- */
+    resetAnnotationToolState() {
+      this.traceModeActive = false;
+      this.measureModeActive = false;
+      this.highlightModeActive = false;
+      this.underlineModeActive = false;
+      this.commentModeActive = false;
+      this.lengthMeasurementActive = false;
+      this.moveModeActive = false;
+      this.isMeasuring = false;
+      this.croppingStarted = false;
+      this.cropButtonClicked = false;
+      this.isOperationInProgress = false;
+
+      this.startPoint = null;
+      this.currentSquare = null;
+      this.currentUnderline = null;
+      this.currentStroke = null;
+      this.moveStartPos = null;
+      this.currentMoveDelta = { x: 0, y: 0 };
+      this.measurePoints = [];
+      this.angleGuideMousePos = null;
+      this.angleSnapGuide = null;
+      this.draggingPoint = -1;
+      this.editingAnnotationIndex = -1;
+
+      this.showTracePopup = false;
+      this.showAngleLabelPopup = false;
+      this.showHorizontalPopup = false;
+      this.showVerticalPopup = false;
+      this.showStatsPanel = false;
+      this.activeBandGroup = null;
+      this.pendingBandGroup = null;
+
+      this.croppedStartPoint = null;
+      this.croppedLive.highlight = null;
+      this.croppedLive.underline = null;
+      this.croppedLive.trace = null;
+      this.croppedLive.measure = null;
+      this.croppedDraggingPoint = -1;
+      this.croppedEditingAnnotationIndex = -1;
+
+      this._removeComposerOverlay();
+      this.currentCommentText = '';
+      this.setHighlightInteractionLock(false);
+      this.setOsdMouseNavEnabled(true);
+      this.hideAnnotationTooltip();
+    },
+
     selectTool(tool) {
       if (!this.currentImage) return;
 
       // Prevent tool switching during active operation
-      if (this.isOperationInProgress) {
+      if (this.toolSwitchLocked) {
         console.warn('Cannot switch tools during active operation');
         return;
       }
 
-      // reset non-related modes
-      const resetAll = () => {
-        this.traceModeActive = false;
-        this.measureModeActive = false;
-        this.highlightModeActive = false;
-        this.underlineModeActive = false;
-        this.commentModeActive = false;
-        this.lengthMeasurementActive = false;
-        this.moveModeActive = false;
-        this.moveStartPos = null;
-        this.currentMoveDelta = { x: 0, y: 0 };
-        this.isMeasuring = false;
-        this.croppingStarted = false;
-        this.cropButtonClicked = false;
-        this.showStatsPanel = false;
-        // Close any open comment composer when switching tools
-        this._removeComposerOverlay();
-        this.currentCommentText = "";
-        // Clear cropped popup tool state
-        this.croppedStartPoint = null;
-        this.croppedLive.highlight = null;
-        this.croppedLive.underline = null;
-      };
+      // Recover from a stale pointer lock before changing modes.
+      this.isOperationInProgress = false;
+
+      if (!tool || tool === 'pan') {
+        this.resetAnnotationToolState();
+        this.showToolMessage('Pan mode active.');
+        return;
+      }
 
       if (tool === "trace") {
         if (this.traceModeActive) {
@@ -3442,7 +3645,7 @@ export default {
           this.showToolMessage("Trace mode off.");
           return;
         }
-        resetAll();
+        this.resetAnnotationToolState();
         // Open pen picker first
         this.showTracePopup = true;
         return;
@@ -3455,7 +3658,7 @@ export default {
           this.showToolMessage("Angle measurement mode deactivated.");
           return;
         }
-        resetAll();
+        this.resetAnnotationToolState();
         // open label chooser first
         this.showAngleLabelPopup = true;
         return;
@@ -3472,7 +3675,7 @@ export default {
           this.showToolMessage("Highlight mode deactivated.");
           return;
         }
-        resetAll();
+        this.resetAnnotationToolState();
         this.highlightModeActive = true;
         this.setHighlightInteractionLock(true);
         this.setOsdMouseNavEnabled(false);
@@ -3489,14 +3692,14 @@ export default {
           this.showToolMessage("Underline mode deactivated.");
           return;
         }
-        resetAll();
+        this.resetAnnotationToolState();
         this.underlineModeActive = true;
         this.showToolMessage("Underline mode ACTIVE. Click and drag to add underlines. Click Underline again to exit.");
         return;
       }
 
       if (tool === "comment") {
-        resetAll();
+        this.resetAnnotationToolState();
         this.commentModeActive = true;
         this.showToolMessage("Click anywhere to add a comment.");
         // comment is placed on next click-down within stage via startTrace
@@ -3513,13 +3716,12 @@ export default {
     openHorizontalPopup() {
       // toggle off if horizontal band mode already active
       if (this.lengthMeasurementActive && this.activeBandGroup === 'horizontal') {
-        this.lengthMeasurementActive = false;
-        this.isMeasuring = false;
-        this.activeBandGroup = null;
+        this.resetAnnotationToolState();
         this.showToolMessage('Horizontal bands deactivated.');
         return;
       }
       // otherwise open chooser for (re)selecting the type
+      this.resetAnnotationToolState();
       this.pendingBandGroup = 'horizontal';
       this.showStatsPanel = false;
       this.showHorizontalPopup = true;
@@ -3528,13 +3730,12 @@ export default {
     openVerticalPopup() {
       // toggle off if vertical band mode already active
       if (this.lengthMeasurementActive && this.activeBandGroup === 'vertical') {
-        this.lengthMeasurementActive = false;
-        this.isMeasuring = false;
-        this.activeBandGroup = null;
+        this.resetAnnotationToolState();
         this.showToolMessage('Vertical bands deactivated.');
         return;
       }
       // otherwise open chooser for (re)selecting the type
+      this.resetAnnotationToolState();
       this.pendingBandGroup = 'vertical';
       this.showStatsPanel = false;
       this.showVerticalPopup = true;
@@ -3800,12 +4001,16 @@ cancelPenSelection() {
       const comments = this.comments[this.currentPage] || [];
       if (!this.osdViewer) return;
 
-      comments.forEach(c => {
+      comments.forEach((c, index) => {
         const vp = this._imageToViewportPoint(c.x, c.y);
         if (!vp) return;
 
         const el = document.createElement('div');
-        el.className = 'comment-pin-wrapper';
+        el.className = 'comment-pin-wrapper annotation-interactive';
+        el.title = this.getAnnotationBankLabel('comment', c, index);
+        if (this.isAnnotationFlashing('comment', c)) {
+          el.classList.add('annotation-flash');
+        }
         el.innerHTML = `<div class="comment-pin-icon">💬</div>`;
 
         if (this.expandedCommentId === c.id) {
@@ -3820,6 +4025,9 @@ cancelPenSelection() {
          'dblclick', 'touchstart', 'touchend'
         ].forEach(evt => el.addEventListener(evt, stopPin, true));
         el.addEventListener('click', (e) => { e.stopPropagation(); this.toggleCommentExpand(c.id); });
+        el.addEventListener('pointerenter', e => this.showAnnotationTooltip('comment', c, index, e));
+        el.addEventListener('pointermove', e => this.moveAnnotationTooltip(e));
+        el.addEventListener('pointerleave', () => this.hideAnnotationTooltip());
 
         this.osdViewer.addOverlay({
           element: el,
@@ -4703,6 +4911,10 @@ cancelPenSelection() {
           this.measurePoints = [];
           this.angleGuideMousePos = null;
           this.angleSnapGuide = null;
+          // Angle creation completes on the third pointer-down. Release the
+          // toolbar lock here instead of relying on a later mouseup target.
+          this.isOperationInProgress = false;
+          this.setOsdMouseNavEnabled(true);
         }
         return;
       }
@@ -5195,10 +5407,13 @@ cancelPenSelection() {
       this.imageLoaded = true;
     },
     startCrop() {
+      if (this.toolSwitchLocked) return;
+      this.resetAnnotationToolState();
       this.croppingStarted = true;
       this.cropButtonClicked = true;
       this.currentSquare = null;
       this.startPoint = null;
+      this.croppedSourceRegion = null;
       this.showToolMessage("Click and drag to crop.");
     },
     async generateCroppedFromCurrentSquare() {
@@ -5221,6 +5436,14 @@ cancelPenSelection() {
         setTimeout(() => { this.toolMessage = ''; }, 2000);
         return;
       }
+
+      this.croppedSourceRegion = {
+        x,
+        y,
+        width,
+        height,
+        pageIndex: this.currentPage,
+      };
 
       // Helper: Canvas-based crop (works with any image)
       const cropViaCanvas = async (imageUrl) => {
@@ -5274,6 +5497,7 @@ cancelPenSelection() {
 
       } catch (error) {
         console.error('Crop failed:', error);
+        this.croppedSourceRegion = null;
         this.toolMessage = 'Failed to crop image. Please try again.';
         setTimeout(() => { this.toolMessage = ''; }, 3000);
       }
@@ -5408,13 +5632,122 @@ cancelPenSelection() {
         this.closeCroppedPopup();
       }
     },
+    transposeCroppedAnnotationsToMain() {
+      const region = this.croppedSourceRegion;
+      const cropWidth = Number(this.croppedBaseW) || 0;
+      const cropHeight = Number(this.croppedBaseH) || 0;
+      if (!region || cropWidth <= 0 || cropHeight <= 0 || !this.croppedAnnotations.length) {
+        return [];
+      }
+
+      const pageIndex = region.pageIndex;
+      if (!this.annotationsByPage[pageIndex]) this.annotationsByPage[pageIndex] = [];
+
+      const scaleX = region.width / cropWidth;
+      const scaleY = region.height / cropHeight;
+      const mapPoint = point => ({
+        ...point,
+        x: region.x + (Number(point.x) || 0) * scaleX,
+        y: region.y + (Number(point.y) || 0) * scaleY,
+      });
+      const baseFields = () => ({
+        id: safeUUID(),
+        pageIndex,
+        createdBy: this.localParticipant?.id || null,
+      });
+
+      const transposed = this.croppedAnnotations.map(annotation => {
+        if (annotation.type === 'highlight' && annotation.rect) {
+          return {
+            ...annotation,
+            ...baseFields(),
+            type: 'highlight',
+            x: region.x + annotation.rect.left * scaleX,
+            y: region.y + annotation.rect.top * scaleY,
+            width: annotation.rect.width * scaleX,
+            height: annotation.rect.height * scaleY,
+            rect: undefined,
+          };
+        }
+
+        if (annotation.type === 'underline' && annotation.line) {
+          const x1 = region.x + annotation.line.x1 * scaleX;
+          const x2 = region.x + annotation.line.x2 * scaleX;
+          const y1 = region.y + annotation.line.y1 * scaleY;
+          const y2 = region.y + annotation.line.y2 * scaleY;
+          return {
+            ...annotation,
+            ...baseFields(),
+            type: 'underline',
+            x: Math.min(x1, x2),
+            y: Math.min(y1, y2),
+            width: Math.abs(x2 - x1),
+            height: Math.max(2 * scaleY, Math.abs(y2 - y1)),
+            line: undefined,
+          };
+        }
+
+        if (annotation.type === 'trace' && Array.isArray(annotation.points)) {
+          return {
+            ...annotation,
+            ...baseFields(),
+            type: 'trace',
+            points: annotation.points.map(mapPoint),
+            penWidth: (annotation.penWidth || 2) * scaleX,
+            penHeight: (annotation.penHeight || annotation.penWidth || 2) * scaleY,
+          };
+        }
+
+        if (annotation.type === 'measure' && Array.isArray(annotation.points)) {
+          const points = annotation.points.map(mapPoint);
+          return {
+            ...annotation,
+            ...baseFields(),
+            type: 'measure',
+            points,
+            point1: undefined,
+            vertex: undefined,
+            point2: undefined,
+            angle: points.length === 3
+              ? this.calculateAngle(points[0], points[1], points[2])
+              : annotation.angle,
+          };
+        }
+
+        return null;
+      }).filter(Boolean);
+
+      this.annotationsByPage[pageIndex].push(...transposed);
+
+      if (this.sessionConnected) {
+        const syncTypes = {
+          highlight: 'highlights',
+          underline: 'underlines',
+          trace: 'traces',
+          measure: 'measures',
+        };
+        transposed.forEach(annotation => {
+          this.syncAddAnnotation(syncTypes[annotation.type], annotation);
+        });
+      } else if (this.activeSessionId && transposed.length) {
+        this.syncAllAnnotations(this.getAllAnnotations()).catch(error => {
+          console.error('Failed to persist cropped annotations:', error);
+          this.showToolMessage('Crop annotations restored locally, but session sync failed.');
+        });
+      }
+
+      return transposed;
+    },
     closeCroppedPopup() {
-      // Clear cropped annotations (temporary labels will be removed)
+      const transposed = this.transposeCroppedAnnotationsToMain();
+
+      // Clear cropped annotations after they have been mapped to the main image
       this.croppedAnnotations = [];
       this.croppedLive = { highlight: null, underline: null, trace: null };
       this.croppedStartPoint = null;
       
       this.croppedImage = null;
+      this.croppedSourceRegion = null;
       
       // Remove class from body
       document.body.classList.remove('cropped-popup-active');
@@ -5436,6 +5769,11 @@ cancelPenSelection() {
       this.cropPanX = 0;
       this.cropPanY = 0;
       this.isCropPanning = false;
+
+      if (transposed.length) {
+        const suffix = transposed.length === 1 ? '' : 's';
+        this.showToolMessage(`${transposed.length} crop annotation${suffix} added to the main image.`);
+      }
     },
 
     // Cropped image loading and sizing
@@ -6228,6 +6566,65 @@ cancelPenSelection() {
 .annotation-overlay .drawing-layer .angle-hit-target {
   pointer-events: stroke !important;
   cursor: pointer;
+}
+
+.annotation-interactive {
+  pointer-events: auto !important;
+  cursor: help;
+}
+
+.annotation-overlay .drawing-layer .annotation-interactive {
+  pointer-events: painted !important;
+}
+
+.underline-line.annotation-interactive::before {
+  content: '';
+  position: absolute;
+  inset: -5px 0;
+}
+
+.annotation-flash {
+  animation: annotation-light-pulse 0.55s ease-in-out infinite alternate !important;
+}
+
+.highlight-rectangle.annotation-flash,
+.underline-line.annotation-flash,
+.length-measurement.annotation-flash,
+.angle-label.annotation-flash {
+  outline: 3px solid #facc15 !important;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px rgb(250 204 21 / 0.35), 0 0 20px 8px rgb(250 204 21 / 0.65) !important;
+}
+
+.annotation-overlay .drawing-layer .saved-angle-group.annotation-flash .angle-line {
+  stroke: #facc15 !important;
+  filter: drop-shadow(0 0 7px #facc15);
+}
+
+.annotation-overlay .drawing-layer .annotation-trace.annotation-flash {
+  filter: drop-shadow(0 0 4px #fff) drop-shadow(0 0 9px #facc15);
+}
+
+@keyframes annotation-light-pulse {
+  from { filter: brightness(1) drop-shadow(0 0 2px rgb(250 204 21 / 0.7)); }
+  to { filter: brightness(1.5) drop-shadow(0 0 10px #facc15); }
+}
+
+.annotation-hover-tooltip {
+  position: fixed;
+  z-index: 10020;
+  max-width: 210px;
+  padding: 6px 9px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 5px 16px rgb(0 0 0 / 0.2);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  pointer-events: none;
+  white-space: normal;
 }
 
 .annotation-overlay .drawing-layer .saved-angle-group.is-keyboard-selected .angle-line {
@@ -7376,6 +7773,15 @@ div.statistics-popup,
 }
 .comment-pin-icon:hover {
   transform: scale(1.15);
+}
+.comment-pin-wrapper.annotation-flash .comment-pin-icon {
+  outline: 3px solid #facc15;
+  outline-offset: 3px;
+  animation: comment-annotation-light-pulse 0.55s ease-in-out infinite alternate;
+}
+@keyframes comment-annotation-light-pulse {
+  from { box-shadow: 0 0 4px 2px rgb(250 204 21 / 0.45); }
+  to { box-shadow: 0 0 18px 8px rgb(250 204 21 / 0.85); transform: scale(1.12); }
 }
 .comment-expanded-bubble {
   position: absolute;
