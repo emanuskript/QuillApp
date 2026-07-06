@@ -196,12 +196,12 @@ export function useSession() {
     ws.send('annotation:add', { annotationType, annotation })
   }
 
-  const updateAnnotation = (annotationType, annotationId, updates) => {
-    ws.send('annotation:update', { annotationType, annotationId, updates })
+  const updateAnnotation = (annotationType, annotationId, updates, pageIndex) => {
+    ws.send('annotation:update', { annotationType, annotationId, updates, pageIndex })
   }
 
-  const deleteAnnotation = (annotationType, annotationId) => {
-    ws.send('annotation:delete', { annotationType, annotationId })
+  const deleteAnnotation = (annotationType, annotationId, pageIndex) => {
+    ws.send('annotation:delete', { annotationType, annotationId, pageIndex })
   }
 
   // ---- WS: generic message subscription ---------------------------------

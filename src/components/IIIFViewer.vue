@@ -236,9 +236,34 @@
           <g
             v-for="(annotation, index) in currentPageAngles"
             :key="'angle-' + index"
+            class="saved-angle-group"
+            :class="{ 'is-keyboard-selected': isAngleSelectedForKeyboardMove(annotation) }"
+            @click.stop="selectAngleForKeyboardMove(annotation)"
+            @contextmenu.prevent.stop="openAngleContextMenu(annotation, $event)"
           >
             <line
               v-if="annotation.type === 'measure' && annotation.points.length >= 2"
+              class="angle-hit-target"
+              :x1="annotation.points[0].x"
+              :y1="annotation.points[0].y"
+              :x2="annotation.points[1].x"
+              :y2="annotation.points[1].y"
+              stroke="transparent"
+              :stroke-width="12 * svgInverseScale"
+            />
+            <line
+              v-if="annotation.type === 'measure' && annotation.points.length === 3"
+              class="angle-hit-target"
+              :x1="annotation.points[1].x"
+              :y1="annotation.points[1].y"
+              :x2="annotation.points[2].x"
+              :y2="annotation.points[2].y"
+              stroke="transparent"
+              :stroke-width="12 * svgInverseScale"
+            />
+            <line
+              v-if="annotation.type === 'measure' && annotation.points.length >= 2"
+              class="angle-line"
               :x1="annotation.points[0].x"
               :y1="annotation.points[0].y"
               :x2="annotation.points[1].x"
@@ -248,6 +273,7 @@
             />
             <line
               v-if="annotation.type === 'measure' && annotation.points.length === 3"
+              class="angle-line"
               :x1="annotation.points[1].x"
               :y1="annotation.points[1].y"
               :x2="annotation.points[2].x"
@@ -354,6 +380,7 @@
         >
           <div
             class="angle-label draggable-label"
+            :class="{ 'is-keyboard-selected': isAngleSelectedForKeyboardMove(annotation) }"
             :style="{
               left: (angleLabelPositions[annotation.id]?.x ?? 10) + 'px',
               top: (angleLabelPositions[annotation.id]?.y ?? -30) + 'px',
@@ -364,6 +391,8 @@
               pointerEvents: 'auto',
             }"
             @mousedown.stop="startAngleLabelDrag(annotation.id, $event)"
+            @click.stop="selectAngleForKeyboardMove(annotation)"
+            @contextmenu.prevent.stop="openAngleContextMenu(annotation, $event)"
           >
             {{ annotation.angle }}°{{ annotation.label ? ' • ' + annotation.label : '' }}
           </div>
@@ -907,6 +936,42 @@
         :color="cursor.color"
       />
     </template>
+
+    <div
+      v-if="angleContextMenu.visible"
+      class="fixed inset-0"
+      style="z-index: 9998;"
+      @mousedown.stop="closeAngleContextMenu"
+      @contextmenu.prevent.stop="closeAngleContextMenu"
+    ></div>
+    <div
+      v-if="angleContextMenu.visible"
+      class="angle-context-menu"
+      :style="{ left: `${angleContextMenu.x}px`, top: `${angleContextMenu.y}px` }"
+      role="menu"
+      aria-label="Angle actions"
+      @mousedown.stop
+      @contextmenu.prevent.stop
+    >
+      <button
+        type="button"
+        class="angle-context-menu__item"
+        role="menuitem"
+        @click.stop="moveAngleFromContextMenu"
+      >
+        <Move :size="15" />
+        Move with arrow keys
+      </button>
+      <button
+        type="button"
+        class="angle-context-menu__item angle-context-menu__delete"
+        role="menuitem"
+        @click.stop="deleteAngleFromContextMenu"
+      >
+        <Trash2 :size="15" />
+        Delete angle
+      </button>
+    </div>
   </div>
 </template>
 
@@ -982,6 +1047,7 @@ import {
   Minus,
   Compass,
   Hand,
+  Move,
 } from "lucide-vue-next";
 
 function safeUUID() {
@@ -1041,6 +1107,7 @@ export default {
     Minus,
     Compass,
     Hand,
+    Move,
     Dialog,
     DialogContent,
     DialogHeader,
@@ -1071,6 +1138,7 @@ export default {
       addAnnotation: syncAddAnnotation,
       updateAnnotation: syncUpdateAnnotation,
       deleteAnnotation: syncDeleteAnnotation,
+      updateAnnotations: syncAllAnnotations,
       joinSession,
       leaveSession,
       onMessage: onSessionMessage,
@@ -1120,6 +1188,7 @@ export default {
       syncAddAnnotation,
       syncUpdateAnnotation,
       syncDeleteAnnotation,
+      syncAllAnnotations,
       joinSession,
       leaveSession,
       onSessionMessage,
@@ -1283,6 +1352,16 @@ export default {
       },
       labelPositions: {}, // for length labels drag
       angleLabelPositions: {}, // for angle labels drag
+      angleContextMenu: {
+        visible: false,
+        x: 0,
+        y: 0,
+        annotation: null,
+        pageIndex: 0,
+      },
+      keyboardMovingAngleId: null,
+      keyboardMovingAngleRef: null,
+      keyboardMovingAnglePageIndex: null,
       draggedLabelIndex: null,
       labelDragOffset: { x: 0, y: 0 },
 
@@ -1908,6 +1987,7 @@ export default {
       this.pageInput = n + 1;
       // Clear bank selections when page changes
       this.bankSelectedKeys = [];
+      this.clearKeyboardMovingAngle();
       // Update adjustment page for per-page filters
       this.setAdjustmentPage(n);
       // Refresh comment overlays for the new page
@@ -2070,6 +2150,16 @@ export default {
       }
     };
     window.addEventListener('mouseup', this._globalMouseUp);
+
+    this._angleMoveKeyDown = (event) => this.handleAngleMoveKeyDown(event);
+    this._angleMoveOutsideClick = (event) => {
+      if (!this.keyboardMovingAngleId && !this.keyboardMovingAngleRef) return;
+      const target = event.target;
+      if (target?.closest?.('.saved-angle-group, .angle-label, .angle-context-menu')) return;
+      this.clearKeyboardMovingAngle();
+    };
+    window.addEventListener('keydown', this._angleMoveKeyDown);
+    document.addEventListener('mousedown', this._angleMoveOutsideClick, true);
   },
 
   beforeUnmount() {
@@ -2115,6 +2205,16 @@ export default {
     // Clean up global mouseup handler
     if (this._globalMouseUp) {
       window.removeEventListener('mouseup', this._globalMouseUp);
+    }
+
+    if (this._angleMoveKeyDown) {
+      window.removeEventListener('keydown', this._angleMoveKeyDown);
+    }
+    if (this._angleMoveOutsideClick) {
+      document.removeEventListener('mousedown', this._angleMoveOutsideClick, true);
+    }
+    if (this._angleMovePersistTimer) {
+      clearTimeout(this._angleMovePersistTimer);
     }
 
     // Clean up body class if component is destroyed while popup is open
@@ -2317,8 +2417,8 @@ export default {
         case 'angle': {
           const angles = pageAnnotations.filter(a => a.type === 'measure');
           if (angles[annotation.index]) {
-            const idx = pageAnnotations.indexOf(angles[annotation.index]);
-            if (idx !== -1) this.annotationsByPage[this.currentPage].splice(idx, 1);
+            this.deleteAngleAnnotation(angles[annotation.index], this.currentPage);
+            return;
           }
           break;
         }
@@ -2329,6 +2429,207 @@ export default {
       }
       this.selectedAnnotationItem = null;
       this.showToolMessage("Annotation deleted.");
+    },
+
+    openAngleContextMenu(annotation, event) {
+      if (!annotation) return;
+      const menuWidth = 210;
+      const menuHeight = 82;
+      const margin = 8;
+      this.angleContextMenu = {
+        visible: true,
+        x: Math.max(margin, Math.min(event.clientX, window.innerWidth - menuWidth - margin)),
+        y: Math.max(margin, Math.min(event.clientY, window.innerHeight - menuHeight - margin)),
+        annotation,
+        pageIndex: this.currentPage,
+      };
+    },
+
+    closeAngleContextMenu() {
+      this.angleContextMenu = {
+        visible: false,
+        x: 0,
+        y: 0,
+        annotation: null,
+        pageIndex: this.currentPage,
+      };
+    },
+
+    deleteAngleFromContextMenu() {
+      const { annotation, pageIndex } = this.angleContextMenu;
+      this.closeAngleContextMenu();
+      this.deleteAngleAnnotation(annotation, pageIndex);
+    },
+
+    moveAngleFromContextMenu() {
+      const { annotation, pageIndex } = this.angleContextMenu;
+      this.closeAngleContextMenu();
+      this.selectAngleForKeyboardMove(annotation, pageIndex);
+    },
+
+    isAngleSelectedForKeyboardMove(annotation) {
+      if (!annotation || this.keyboardMovingAnglePageIndex !== this.currentPage) return false;
+      return annotation.id
+        ? annotation.id === this.keyboardMovingAngleId
+        : annotation === this.keyboardMovingAngleRef;
+    },
+
+    selectAngleForKeyboardMove(annotation, pageIndex = this.currentPage) {
+      if (!annotation || annotation.type !== 'measure') return;
+      this.keyboardMovingAngleId = annotation.id || null;
+      this.keyboardMovingAngleRef = annotation.id ? null : annotation;
+      this.keyboardMovingAnglePageIndex = pageIndex;
+      this.showToolMessage('Angle selected. Use arrow keys to move it; hold Shift for larger steps.');
+    },
+
+    clearKeyboardMovingAngle() {
+      this.keyboardMovingAngleId = null;
+      this.keyboardMovingAngleRef = null;
+      this.keyboardMovingAnglePageIndex = null;
+    },
+
+    handleAngleMoveKeyDown(event) {
+      if (!this.keyboardMovingAngleId && !this.keyboardMovingAngleRef) return;
+
+      const target = event.target;
+      const tagName = target?.tagName?.toLowerCase();
+      if (target?.isContentEditable || ['input', 'textarea', 'select'].includes(tagName)) return;
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.clearKeyboardMovingAngle();
+        this.showToolMessage('Angle move selection cleared.');
+        return;
+      }
+
+      if (this.angleContextMenu.visible) return;
+      const step = event.shiftKey ? 10 : 1;
+      const deltas = {
+        ArrowLeft: [-step, 0],
+        ArrowRight: [step, 0],
+        ArrowUp: [0, -step],
+        ArrowDown: [0, step],
+      };
+      const delta = deltas[event.key];
+      if (!delta) return;
+
+      event.preventDefault();
+      this.moveSelectedAngleBy(delta[0], delta[1]);
+    },
+
+    moveSelectedAngleBy(dx, dy) {
+      const pageIndex = this.keyboardMovingAnglePageIndex;
+      const pageAnnotations = this.annotationsByPage[pageIndex] || [];
+      const index = this.keyboardMovingAngleId
+        ? pageAnnotations.findIndex(a => a?.type === 'measure' && a.id === this.keyboardMovingAngleId)
+        : pageAnnotations.indexOf(this.keyboardMovingAngleRef);
+      if (index === -1) {
+        this.clearKeyboardMovingAngle();
+        return false;
+      }
+
+      const annotation = pageAnnotations[index];
+      if (!Array.isArray(annotation.points) || annotation.points.length === 0) return false;
+
+      const xs = annotation.points.map(point => Number(point.x) || 0);
+      const ys = annotation.points.map(point => Number(point.y) || 0);
+      const imageWidth = Number(this.osdImageWidth) || 0;
+      const imageHeight = Number(this.osdImageHeight) || 0;
+      const clampedDx = imageWidth
+        ? Math.max(-Math.min(...xs), Math.min(dx, imageWidth - Math.max(...xs)))
+        : dx;
+      const clampedDy = imageHeight
+        ? Math.max(-Math.min(...ys), Math.min(dy, imageHeight - Math.max(...ys)))
+        : dy;
+
+      if (clampedDx === 0 && clampedDy === 0) return false;
+      const points = annotation.points.map(point => ({
+        ...point,
+        x: (Number(point.x) || 0) + clampedDx,
+        y: (Number(point.y) || 0) + clampedDy,
+      }));
+      const movedAngle = { ...annotation, points };
+      pageAnnotations.splice(index, 1, movedAngle);
+      this.keyboardMovingAngleRef = movedAngle.id ? null : movedAngle;
+
+      if (movedAngle.id && this.sessionConnected) {
+        this.syncUpdateAnnotation('measures', movedAngle.id, { points }, pageIndex);
+      } else if (this.activeSessionId) {
+        clearTimeout(this._angleMovePersistTimer);
+        this._angleMovePersistTimer = setTimeout(() => {
+          this.syncAllAnnotations(this.getAllAnnotations()).catch(error => {
+            console.error('Failed to persist angle movement:', error);
+            this.showToolMessage('Angle moved locally, but session sync failed.');
+          });
+        }, 250);
+      }
+      return true;
+    },
+
+    async deleteAngleAnnotation(annotation, pageIndex = this.currentPage) {
+      if (!annotation) return false;
+      const pageAnnotations = this.annotationsByPage[pageIndex] || [];
+      const annotationId = annotation.id;
+      const index = annotationId
+        ? pageAnnotations.findIndex(a => a?.type === 'measure' && a.id === annotationId)
+        : pageAnnotations.indexOf(annotation);
+
+      if (index === -1) return false;
+
+      const [deletedAngle] = pageAnnotations.splice(index, 1);
+      if ((deletedAngle?.id && deletedAngle.id === this.keyboardMovingAngleId) ||
+          (!deletedAngle?.id && deletedAngle === this.keyboardMovingAngleRef)) {
+        this.clearKeyboardMovingAngle();
+      }
+      if (deletedAngle?.id && this.angleLabelPositions[deletedAngle.id]) {
+        delete this.angleLabelPositions[deletedAngle.id];
+      }
+
+      this.bankSelectedKeys = [];
+      if (this.selectedAnnotationItem?.data?.id === deletedAngle?.id) {
+        this.selectedAnnotationItem = null;
+      }
+      if (pageIndex === this.currentPage && this.editingAnnotationIndex === index) {
+        this.editingAnnotationIndex = -1;
+        this.draggingPoint = -1;
+        this.measurePoints = [];
+      }
+
+      this.refreshVisibleAngleStatistics();
+
+      if (deletedAngle?.id && this.sessionConnected) {
+        this.syncDeleteAnnotation('measures', deletedAngle.id, pageIndex);
+      } else if (this.activeSessionId) {
+        try {
+          await this.syncAllAnnotations(this.getAllAnnotations());
+        } catch (error) {
+          console.error('Failed to persist angle deletion:', error);
+          this.showToolMessage('Angle deleted locally, but session sync failed.');
+          return true;
+        }
+      }
+
+      this.showToolMessage('Angle deleted.');
+      return true;
+    },
+
+    refreshVisibleAngleStatistics() {
+      if (!this.showAngleStatistics) return;
+      const pageCount = this.totalPages || this.annotationsByPage.length || 0;
+      const pages = (this.angleScope === 'page' || pageCount === 0)
+        ? [this.currentPage]
+        : Array.from({ length: pageCount }, (_, i) => i);
+      const labelFilter = this.angleFilterLabel === '__ALL__' ? null : this.angleFilterLabel;
+      const values = pages.flatMap(page =>
+        this.collectAngleValuesFromAnnotations(this.annotationsByPage[page] || [], labelFilter)
+      );
+      const stats = this.buildAngleStatistics(values);
+      if (stats.count === 0) {
+        this.showAngleStatistics = false;
+        this.angleStatistics = stats;
+      } else {
+        this.angleStatistics = stats;
+      }
     },
 
     startHoldReset() {
@@ -3885,12 +4186,12 @@ cancelPenSelection() {
     },
 
     handleRemoteAnnotationSync(payload) {
-      const { action, annotationType, annotation, annotationId, updates, participantId } = payload;
+      const { action, annotationType, annotation, annotationId, updates, participantId, pageIndex: payloadPageIndex } = payload;
 
       // Skip if this is our own change (we already applied it locally)
       if (participantId === this.localParticipant?.id) return;
 
-      const pageIndex = annotation?.pageIndex || 0;
+      const pageIndex = annotation?.pageIndex ?? payloadPageIndex ?? 0;
 
       // Ensure page array exists
       if (!this.annotationsByPage[pageIndex]) {
@@ -3962,6 +4263,9 @@ cancelPenSelection() {
         case 'delete':
           if (annotationType === 'highlights' || annotationType === 'underlines' || annotationType === 'measures' || annotationType === 'traces') {
             this.annotationsByPage[pageIndex] = this.annotationsByPage[pageIndex].filter(a => a.id !== annotationId);
+            if (annotationType === 'measures' && annotationId === this.keyboardMovingAngleId) {
+              this.clearKeyboardMovingAngle();
+            }
           } else if (annotationType === 'comments') {
             this.comments[pageIndex] = this.comments[pageIndex].filter(a => a.id !== annotationId);
           } else if (annotationType === 'horizontalBands' || annotationType === 'verticalBands') {
@@ -5921,6 +6225,16 @@ cancelPenSelection() {
   pointer-events: none;
 }
 
+.annotation-overlay .drawing-layer .angle-hit-target {
+  pointer-events: stroke !important;
+  cursor: pointer;
+}
+
+.annotation-overlay .drawing-layer .saved-angle-group.is-keyboard-selected .angle-line {
+  stroke: #f59e0b;
+  filter: drop-shadow(0 0 3px rgb(245 158 11 / 0.8));
+}
+
 .bank { width: 300px; min-width: 300px; border-left: 1px solid hsl(var(--border)); }
 
 .navigation-bar {
@@ -6052,6 +6366,54 @@ cancelPenSelection() {
   background-color: rgba(0, 0, 0, 0.6); padding: 2px 6px; border-radius: 3px;
   text-shadow: 0 0 2px #000;
   white-space: nowrap;
+}
+
+.angle-label.is-keyboard-selected {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+.angle-context-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 210px;
+  padding: 5px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.22);
+}
+
+.angle-context-menu__item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 5px;
+  padding: 8px 10px;
+  background: transparent;
+  color: hsl(var(--popover-foreground));
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.angle-context-menu__delete {
+  color: hsl(var(--destructive));
+}
+
+.angle-context-menu__item:hover,
+.angle-context-menu__item:focus-visible {
+  background: hsl(var(--accent));
+  outline: none;
+}
+
+.angle-context-menu__delete:hover,
+.angle-context-menu__delete:focus-visible {
+  background: hsl(var(--destructive) / 0.1);
+  outline: none;
 }
 
 .highlight-rectangle { position: absolute; border: 2px solid rgba(255, 255, 0, 0.7); background-color: rgba(255, 255, 0, 0.3); pointer-events: none; }

@@ -211,7 +211,7 @@ async function handleAnnotationUpdate(ws, payload, context) {
     return
   }
 
-  const { annotationType, annotationId, updates } = payload || {}
+  const { annotationType, annotationId, updates, pageIndex } = payload || {}
   if (!annotationType || !annotationId || !updates) {
     sendError(ws, 'Missing annotation data')
     return
@@ -251,6 +251,7 @@ async function handleAnnotationUpdate(ws, payload, context) {
         annotationType,
         annotationId,
         updates: sanitizedUpdates,
+        pageIndex,
         participantId
       }
     })
@@ -270,7 +271,7 @@ async function handleAnnotationDelete(ws, payload, context) {
     return
   }
 
-  const { annotationType, annotationId } = payload || {}
+  const { annotationType, annotationId, pageIndex } = payload || {}
   if (!annotationType || !annotationId) {
     sendError(ws, 'Missing annotation data')
     return
@@ -299,6 +300,7 @@ async function handleAnnotationDelete(ws, payload, context) {
         action: 'delete',
         annotationType,
         annotationId,
+        pageIndex,
         participantId
       }
     })
