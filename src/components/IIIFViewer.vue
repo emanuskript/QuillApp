@@ -337,9 +337,10 @@
           >
             {{ camelToTitle(currentSquare.label) }}:
             {{
-              formatMeasurement(isHorizontalLabel(currentSquare.label)
-                ? currentSquare.height
-                : currentSquare.width)
+              formatMeasurement(
+                isHorizontalLabel(currentSquare.label) ? currentSquare.height : currentSquare.width,
+                isHorizontalLabel(currentSquare.label) ? 'y' : 'x'
+              )
             }}
           </div>
         </div>
@@ -385,9 +386,10 @@
           >
             {{ camelToTitle(measurement.label) }}:
             {{
-              formatMeasurement(isHorizontalLabel(measurement.label)
-                ? measurement.height
-                : measurement.width)
+              formatMeasurement(
+                isHorizontalLabel(measurement.label) ? measurement.height : measurement.width,
+                isHorizontalLabel(measurement.label) ? 'y' : 'x'
+              )
             }}
           </div>
 
@@ -714,6 +716,50 @@
       :vertical="verticalStatistics"
       @close="closeStatisticsPopup"
     />
+
+    <Dialog :open="showMeasurementScalePopup" @update:open="handleMeasurementScalePopupChange">
+      <DialogContent class="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Physical dimensions unavailable</DialogTitle>
+          <DialogDescription>
+            Physical dimensions are not included in the IIIF metadata for this page.
+            Centimetre measurements require a scale.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div v-if="measurementCalibrationMode !== 'dimensions'" class="measurement-scale-options">
+          <button type="button" class="measurement-scale-option" @click="measurementCalibrationMode = 'dimensions'">
+            <strong>Enter real dimensions</strong>
+            <span>Provide the manuscript page width and height in centimetres.</span>
+          </button>
+          <button type="button" class="measurement-scale-option" @click="useApproximateMeasurementScale">
+            <strong>Continue with assumption</strong>
+            <span>Use the approximate 96-DPI conversion (37.8 pixels per centimetre).</span>
+          </button>
+        </div>
+
+        <form v-else class="measurement-calibration-form" @submit.prevent="applyRealDimensionsCalibration">
+          <p>Enter the real dimensions for page {{ currentPage + 1 }}.</p>
+          <div class="measurement-calibration-grid">
+            <label>
+              <span>Width (cm)</span>
+              <input v-model="calibrationWidthCm" type="number" min="0.01" step="0.01" required />
+            </label>
+            <label>
+              <span>Height (cm)</span>
+              <input v-model="calibrationHeightCm" type="number" min="0.01" step="0.01" required />
+            </label>
+          </div>
+          <p v-if="measurementCalibrationError" class="measurement-calibration-error" role="alert">
+            {{ measurementCalibrationError }}
+          </p>
+          <div class="measurement-calibration-actions">
+            <Button type="button" variant="outline" @click="measurementCalibrationMode = 'choice'">Back</Button>
+            <Button type="submit">Use these dimensions</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
 
     <!-- Image Adjustments Panel -->
     <ImageAdjustmentsPanel
@@ -1355,6 +1401,12 @@ export default {
       // Measurement units
       showMeasurementsInCm: false,
       pixelsPerCm: 37.8, // Approximate conversion: 96 DPI = 37.8 pixels per cm
+      measurementScalesByPage: [],
+      showMeasurementScalePopup: false,
+      measurementCalibrationMode: 'choice',
+      calibrationWidthCm: '',
+      calibrationHeightCm: '',
+      measurementCalibrationError: '',
 
       // Bands sticky-mode
       activeBandGroup: null,   // 'horizontal' | 'vertical' | null
@@ -1546,6 +1598,25 @@ export default {
     };
   },
   computed: {
+    currentMeasurementScale() {
+      return this.measurementScalesByPage[this.currentPage] || null;
+    },
+    currentPixelsPerCmX() {
+      const scale = this.currentMeasurementScale;
+      if (scale?.pixelsPerCmX) return scale.pixelsPerCmX;
+      if (scale?.physicalWidthCm && this.osdImageWidth > 0) {
+        return this.osdImageWidth / scale.physicalWidthCm;
+      }
+      return this.pixelsPerCm;
+    },
+    currentPixelsPerCmY() {
+      const scale = this.currentMeasurementScale;
+      if (scale?.pixelsPerCmY) return scale.pixelsPerCmY;
+      if (scale?.physicalHeightCm && this.osdImageHeight > 0) {
+        return this.osdImageHeight / scale.physicalHeightCm;
+      }
+      return this.pixelsPerCm;
+    },
     anchorStyle() {
       // A fixed box centered in the stage; zoom/pan transform is applied here
       return {
@@ -1943,7 +2014,7 @@ export default {
             key: `a:${i}`,
             category: "underline",
             title: "Underline",
-            subtitle: `${this.formatMeasurement(a.width)}${creatorSuffix}`,
+            subtitle: `${this.formatMeasurement(a.width, 'x')}${creatorSuffix}`,
             color: "red",
           });
           return;
@@ -2081,6 +2152,10 @@ export default {
   watch: {
     currentPage(n) {
       this.pageInput = n + 1;
+      if (this.showMeasurementsInCm && !this.measurementScalesByPage[n]) {
+        this.showMeasurementsInCm = false;
+        this.showToolMessage('Centimetre mode was turned off because this page has no physical scale.');
+      }
       // Clear bank selections when page changes
       this.bankSelectedKeys = [];
       this.clearKeyboardMovingAngle();
@@ -2190,6 +2265,7 @@ export default {
 
       // Store image list as JSON so session sharing can reconstruct pages
       this.iiifManifest = JSON.stringify(this.images);
+      this.measurementScalesByPage = [];
       this.annotationsByPage = this.images.map(() => []);
       this.comments = this.images.map(() => []);
       return;
@@ -2199,6 +2275,7 @@ export default {
     const loadedAsManifest = await this.fetchIIIFImages(this.source, { silent: true });
     if (!loadedAsManifest) {
       this.images = [this.source];
+      this.measurementScalesByPage = [];
       this.annotationsByPage = [ [] ];
       this.comments = [ [] ];
     }
@@ -3213,6 +3290,82 @@ export default {
       return `${normalized}/full/max/0/default.jpg`;
     },
 
+    _physicalScaleFromNode(node) {
+      if (!node || typeof node !== 'object') return null;
+      const candidates = [node];
+      const visited = new Set();
+      while (candidates.length) {
+        const candidate = candidates.shift();
+        if (!candidate || typeof candidate !== 'object' || visited.has(candidate)) continue;
+        visited.add(candidate);
+        const physicalScale = Number(candidate?.physicalScale);
+        const unit = String(candidate?.physicalUnits || '').toLowerCase();
+        const unitToCm = { mm: 0.1, cm: 1, in: 2.54 }[unit];
+        if (Number.isFinite(physicalScale) && physicalScale > 0 && unitToCm) {
+          return {
+            cmPerUnit: physicalScale * unitToCm,
+            physicalScale,
+            physicalUnits: unit,
+          };
+        }
+        const nested = Array.isArray(candidate.service)
+          ? candidate.service
+          : (candidate.service ? [candidate.service] : []);
+        candidates.push(...nested);
+      }
+      return null;
+    },
+
+    _firstCanvasImageBody(canvas) {
+      const v2Body = canvas?.images?.[0]?.resource || canvas?.images?.[0]?.body;
+      if (v2Body) return Array.isArray(v2Body) ? v2Body[0] : v2Body;
+
+      const pages = Array.isArray(canvas?.items) ? canvas.items : [];
+      for (const page of pages) {
+        const annotations = Array.isArray(page?.items) ? page.items : [];
+        for (const annotation of annotations) {
+          const body = Array.isArray(annotation?.body) ? annotation.body[0] : annotation?.body;
+          if (body) return body;
+        }
+      }
+      return null;
+    },
+
+    _extractIiifPhysicalScales(manifest) {
+      const canvases = Array.isArray(manifest?.sequences?.[0]?.canvases)
+        ? manifest.sequences[0].canvases
+        : (Array.isArray(manifest?.items) ? manifest.items : []);
+      const manifestScale = this._physicalScaleFromNode(manifest);
+
+      return canvases.map((canvas) => {
+        const body = this._firstCanvasImageBody(canvas);
+        const bodyScale = this._physicalScaleFromNode(body);
+        if (bodyScale) {
+          const pixelsPerCm = 1 / bodyScale.cmPerUnit;
+          return {
+            source: 'iiif',
+            pixelsPerCmX: pixelsPerCm,
+            pixelsPerCmY: pixelsPerCm,
+            ...bodyScale,
+          };
+        }
+
+        const canvasScale = this._physicalScaleFromNode(canvas) || manifestScale;
+        const canvasWidth = Number(canvas?.width);
+        const canvasHeight = Number(canvas?.height);
+        if (!canvasScale || !Number.isFinite(canvasWidth) || !Number.isFinite(canvasHeight) || canvasWidth <= 0 || canvasHeight <= 0) {
+          return null;
+        }
+
+        return {
+          source: 'iiif',
+          physicalWidthCm: canvasWidth * canvasScale.cmPerUnit,
+          physicalHeightCm: canvasHeight * canvasScale.cmPerUnit,
+          ...canvasScale,
+        };
+      });
+    },
+
     _extractIIIFImageUrls(manifest) {
       if (!manifest) return [];
 
@@ -3289,6 +3442,7 @@ export default {
         }
 
         this.images = extractedImages;
+        this.measurementScalesByPage = this._extractIiifPhysicalScales(manifest);
         this.annotationsByPage = new Array(this.images.length).fill(null).map(() => []);
         this.comments = new Array(this.images.length).fill(null).map(() => []);
         return true;
@@ -4477,12 +4631,14 @@ cancelPenSelection() {
         if (session.iiifManifest.startsWith('[')) {
           // JSON array of image URLs (from uploaded files)
           this.images = JSON.parse(session.iiifManifest);
+          this.measurementScalesByPage = [];
           this.annotationsByPage = this.images.map(() => []);
           this.comments = this.images.map(() => []);
         } else {
           const loadedAsManifest = await this.fetchIIIFImages(session.iiifManifest, { silent: true });
           if (!loadedAsManifest) {
             this.images = [session.iiifManifest];
+            this.measurementScalesByPage = [];
             this.annotationsByPage = [ [] ];
             this.comments = [ [] ];
           }
@@ -5518,13 +5674,78 @@ cancelPenSelection() {
 
     /* ---------- Measurement Units Toggle ---------- */
     toggleMeasurementUnits() {
-      this.showMeasurementsInCm = !this.showMeasurementsInCm;
-      this.showToolMessage(`Measurements now shown in ${this.showMeasurementsInCm ? 'centimeters' : 'pixels'}.`);
+      if (this.showMeasurementsInCm) {
+        this.showMeasurementsInCm = false;
+        this.showToolMessage('Measurements now shown in pixels.');
+        return;
+      }
+
+      if (this.currentMeasurementScale) {
+        this.showMeasurementsInCm = true;
+        const sourceLabel = this.currentMeasurementScale.source === 'iiif'
+          ? 'IIIF physical-dimension metadata'
+          : (this.currentMeasurementScale.source === 'user' ? 'your page calibration' : 'the 96-DPI approximation');
+        this.showToolMessage(`Measurements now shown in centimeters using ${sourceLabel}.`);
+        return;
+      }
+
+      this.measurementCalibrationMode = 'choice';
+      this.calibrationWidthCm = '';
+      this.calibrationHeightCm = '';
+      this.measurementCalibrationError = '';
+      this.showMeasurementScalePopup = true;
     },
 
-    formatMeasurement(pixels) {
+    handleMeasurementScalePopupChange(open) {
+      this.showMeasurementScalePopup = open;
+      if (!open) {
+        this.measurementCalibrationMode = 'choice';
+        this.measurementCalibrationError = '';
+      }
+    },
+
+    useApproximateMeasurementScale() {
+      this.measurementScalesByPage[this.currentPage] = {
+        source: 'assumption',
+        pixelsPerCmX: this.pixelsPerCm,
+        pixelsPerCmY: this.pixelsPerCm,
+      };
+      this.showMeasurementScalePopup = false;
+      this.showMeasurementsInCm = true;
+      this.showToolMessage('Measurements now shown in centimeters using the approximate 96-DPI assumption.');
+    },
+
+    applyRealDimensionsCalibration() {
+      const widthCm = Number(this.calibrationWidthCm);
+      const heightCm = Number(this.calibrationHeightCm);
+      const imageWidth = Number(this.osdImageWidth);
+      const imageHeight = Number(this.osdImageHeight);
+      if (!Number.isFinite(widthCm) || widthCm <= 0 || !Number.isFinite(heightCm) || heightCm <= 0) {
+        this.measurementCalibrationError = 'Enter positive width and height values.';
+        return;
+      }
+      if (!Number.isFinite(imageWidth) || imageWidth <= 0 || !Number.isFinite(imageHeight) || imageHeight <= 0) {
+        this.measurementCalibrationError = 'The original image dimensions are not available yet.';
+        return;
+      }
+
+      this.measurementScalesByPage[this.currentPage] = {
+        source: 'user',
+        physicalWidthCm: widthCm,
+        physicalHeightCm: heightCm,
+        pixelsPerCmX: imageWidth / widthCm,
+        pixelsPerCmY: imageHeight / heightCm,
+      };
+      this.showMeasurementScalePopup = false;
+      this.showMeasurementsInCm = true;
+      this.measurementCalibrationError = '';
+      this.showToolMessage('Measurements now shown in centimeters using your page dimensions.');
+    },
+
+    formatMeasurement(pixels, axis = 'x') {
       if (this.showMeasurementsInCm) {
-        const cm = pixels / this.pixelsPerCm;
+        const pixelsPerCm = axis === 'y' ? this.currentPixelsPerCmY : this.currentPixelsPerCmX;
+        const cm = pixels / pixelsPerCm;
         return `${cm.toFixed(1)} cm`;
       } else {
         return `${Math.round(pixels)} px`;
@@ -5533,8 +5754,8 @@ cancelPenSelection() {
 
     formatDimensions(width, height) {
       if (this.showMeasurementsInCm) {
-        const widthCm = width / this.pixelsPerCm;
-        const heightCm = height / this.pixelsPerCm;
+        const widthCm = width / this.currentPixelsPerCmX;
+        const heightCm = height / this.currentPixelsPerCmY;
         return `${widthCm.toFixed(1)}×${heightCm.toFixed(1)} cm`;
       } else {
         return `${Math.round(width)}×${Math.round(height)} px`;
@@ -6934,6 +7155,63 @@ cancelPenSelection() {
 .band-resize-handle--ne { right: 0; top: 0; transform: translate(50%, -50%); cursor: nesw-resize; }
 .band-resize-handle--se { right: 0; bottom: 0; transform: translate(50%, 50%); cursor: nwse-resize; }
 .band-resize-handle--sw { left: 0; bottom: 0; transform: translate(-50%, 50%); cursor: nesw-resize; }
+.measurement-scale-options {
+  display: grid;
+  gap: 12px;
+  padding-top: 8px;
+}
+.measurement-scale-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  text-align: left;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius-lg);
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+}
+.measurement-scale-option:hover {
+  border-color: hsl(var(--primary));
+  background: hsl(var(--accent));
+}
+.measurement-scale-option span,
+.measurement-calibration-form p {
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+.measurement-calibration-form {
+  display: grid;
+  gap: 16px;
+  padding-top: 8px;
+}
+.measurement-calibration-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.measurement-calibration-grid label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.measurement-calibration-grid input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius-md);
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+.measurement-calibration-error {
+  color: hsl(var(--destructive)) !important;
+}
+.measurement-calibration-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .length-label {
   position: absolute; left: 15px; top: 15px; transform: translateY(0);
   color: hsl(var(--foreground)); font-size: 12px; background-color: hsl(var(--card)); padding: 2px 5px; border-radius: 3px;

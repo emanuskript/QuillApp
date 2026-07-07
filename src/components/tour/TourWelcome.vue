@@ -61,7 +61,7 @@ function handleOpenChange(open) {
         </div>
         <div class="tour-welcome__feature">
           <Icon name="ruler" :size="18" />
-          <span>Measure angles and dimensions</span>
+          <span>Measure, calibrate, and resize dimensions</span>
         </div>
         <div class="tour-welcome__feature">
           <Icon name="sparkles" :size="18" />
