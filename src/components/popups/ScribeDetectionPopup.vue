@@ -257,10 +257,15 @@
           <div class="results-explainer">
             <h5>How to read these results</h5>
             <p>
-              PharoSight compares handwriting features line by line. “Detected Hands” groups
-              neighboring lines that look stylistically consistent, “Confidence” reports how strong
-              the detected transitions are, and “Features” lists the measurements used to explain
-              each hand assignment.
+              In the code, PharoSight sends the selected page image and line regions to the backend,
+              preprocesses the image with Sauvola binarization, extracts line-level handwriting
+              features such as stroke width, spacing, slant, curvature, pressure, and baseline
+              straightness, then scores how those feature vectors change from one line to the next.
+              The selected algorithm detects transition points: Peaks finds strong jumps in the
+              change scores, Ruptures runs change-point detection over the feature sequence, and Auto
+              chooses the better strategy for the available data. “Detected Hands” are contiguous
+              line groups between those transition points, “Confidence” is the strength of the
+              detected separation, and “Features” shows the measurements that drove the assignment.
             </p>
           </div>
 
@@ -2209,9 +2214,15 @@ export default {
 
         const el = this.$refs.exportWrapper || this.$el.querySelector('.results-section')
         if (!el) return
+        el.classList.add('is-exporting-pdf')
         const { jsPDF } = await import('jspdf')
         const html2canvas = (await import('html2canvas')).default
-        const canvas = await html2canvas(el, { scale: 2, backgroundColor: '#ffffff', useCORS: true })
+        const canvas = await html2canvas(el, {
+          scale: 2,
+          backgroundColor: '#ffffff',
+          useCORS: true,
+          ignoreElements: (element) => element.classList?.contains('zoom-controls')
+        })
         const pdf = new jsPDF('p', 'pt', 'a4')
         const pageWidth = pdf.internal.pageSize.getWidth()
         const pageHeight = pdf.internal.pageSize.getHeight()
@@ -2246,6 +2257,8 @@ export default {
         console.error(e)
         alert('Failed to export PDF')
       } finally {
+        const el = this.$refs.exportWrapper || this.$el.querySelector('.results-section')
+        el?.classList?.remove('is-exporting-pdf')
         this.resultsZoom = viewSnapshot.resultsZoom
         this.resultsPanX = viewSnapshot.resultsPanX
         this.resultsPanY = viewSnapshot.resultsPanY
@@ -2557,6 +2570,11 @@ export default {
   z-index: 6;
   box-shadow: 0 4px 14px rgba(0,0,0,0.16);
 }
+
+.is-exporting-pdf .zoom-controls {
+  display: none !important;
+}
+
 .zoom-chip {
   min-width: 28px;
   height: 26px;
