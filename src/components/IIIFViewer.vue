@@ -2669,36 +2669,63 @@ export default {
     },
     renameAnnotation(annotationItem, rawName) {
       const target = annotationItem?.data;
-      const type = this.normalizeAnnotationDisplayType(annotationItem?.type);
-      const syncTypes = {
+      const originalType = annotationItem?.type;
+      const type = this.normalizeAnnotationDisplayType(originalType);
+      const annotationSyncTypes = {
         trace: 'traces',
         highlight: 'highlights',
         underline: 'underlines',
+        angle: 'measures',
       };
-      if (!target || !syncTypes[type]) return;
-      const name = String(rawName || '').trim();
-      const pageIndex = Number.isInteger(target.pageIndex) ? target.pageIndex : this.currentPage;
-      const pageAnnotations = this.annotationsByPage[pageIndex] || [];
-      const rawType = type === 'angle' ? 'measure' : type;
-      const idx = target.id
-        ? pageAnnotations.findIndex(annotation => annotation.type === rawType && annotation.id === target.id)
-        : pageAnnotations.indexOf(target);
-      if (idx === -1) return;
+      if (!target) return;
 
+      const name = String(rawName || '').trim();
       const updates = { name: name || null };
-      pageAnnotations[idx] = {
-        ...pageAnnotations[idx],
-        ...updates,
-      };
-      const updatedAnnotation = pageAnnotations[idx];
+      const pageIndex = Number.isInteger(target.pageIndex) ? target.pageIndex : this.currentPage;
+
+      let updatedAnnotation = null;
+      let syncType = annotationSyncTypes[type] || null;
+
+      if (type === 'comment') {
+        const pageComments = this.comments[pageIndex] || [];
+        const idx = target.id
+          ? pageComments.findIndex(comment => comment.id === target.id)
+          : pageComments.indexOf(target);
+        if (idx === -1) return;
+        pageComments[idx] = { ...pageComments[idx], ...updates };
+        updatedAnnotation = pageComments[idx];
+        syncType = 'comments';
+        if (pageIndex === this.currentPage) this.renderCommentOverlays();
+      } else if (type === 'length') {
+        const label = target.label;
+        const bandArray = label ? this.lengthMeasurements[label]?.[pageIndex] : null;
+        const idx = bandArray
+          ? (target.id ? bandArray.findIndex(band => band.id === target.id) : bandArray.indexOf(target))
+          : -1;
+        if (idx === -1) return;
+        bandArray[idx] = { ...bandArray[idx], ...updates };
+        updatedAnnotation = bandArray[idx];
+        syncType = originalType === 'length-v' ? 'verticalBands' : 'horizontalBands';
+      } else {
+        const pageAnnotations = this.annotationsByPage[pageIndex] || [];
+        const rawType = type === 'angle' ? 'measure' : type;
+        const idx = target.id
+          ? pageAnnotations.findIndex(annotation => annotation.type === rawType && annotation.id === target.id)
+          : pageAnnotations.indexOf(target);
+        if (idx === -1) return;
+        pageAnnotations[idx] = { ...pageAnnotations[idx], ...updates };
+        updatedAnnotation = pageAnnotations[idx];
+      }
+
+      if (!updatedAnnotation) return;
       this.selectedAnnotationItem = {
         ...annotationItem,
-        label: this.getAnnotationBankLabel(type, updatedAnnotation, annotationItem.index),
+        label: this.getAnnotationBankLabel(originalType, updatedAnnotation, annotationItem.index),
         data: updatedAnnotation,
       };
 
-      if (this.sessionConnected && updatedAnnotation.id) {
-        this.syncUpdateAnnotation(syncTypes[type], updatedAnnotation.id, updates, pageIndex);
+      if (this.sessionConnected && updatedAnnotation.id && syncType) {
+        this.syncUpdateAnnotation(syncType, updatedAnnotation.id, updates, pageIndex);
       }
     },
 
@@ -2714,13 +2741,16 @@ export default {
       if (normalizedType === 'underline') return annotation?.name || `Underline ${index + 1}`;
       if (normalizedType === 'trace') return annotation?.name || `Trace ${index + 1}`;
       if (normalizedType === 'comment') {
+        if (annotation?.name) return annotation.name;
         const text = annotation?.text || '';
         return text.substring(0, 25) + (text.length > 25 ? '...' : '') || `Comment ${index + 1}`;
       }
       if (normalizedType === 'angle') {
+        if (annotation?.name) return annotation.name;
         return `${annotation?.angle}°${annotation?.label ? ' - ' + annotation.label : ''}`;
       }
       if (normalizedType === 'length') {
+        if (annotation?.name) return annotation.name;
         return annotation?.label ? this.camelToTitle(annotation.label) : `Length ${index + 1}`;
       }
       return `Annotation ${index + 1}`;

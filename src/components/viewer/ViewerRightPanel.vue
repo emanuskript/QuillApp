@@ -57,7 +57,7 @@ function isSelected(annotation) {
 }
 
 function canRename(annotation) {
-  return ['trace', 'highlight', 'underline'].includes(annotation?.type)
+  return !!annotation?.data
 }
 
 function handleAnnotationNameChange(annotation, event) {
