@@ -117,22 +117,36 @@
           preserveAspectRatio="xMidYMid meet"
         >
           <!-- existing traces (calligraphic paths with variable width) -->
-          <path
+          <g
             v-for="(stroke, index) in currentPageStrokes"
-            :key="'stroke-' + index"
-            class="annotation-trace"
+            :key="'stroke-group-' + (stroke.id || index)"
+            class="trace-selection-group"
             :class="{
-              'annotation-interactive': !isAnyToolActive,
+              'is-selected': isSelectedAnnotation('trace', stroke),
               'annotation-flash': isAnnotationFlashing('trace', stroke)
             }"
-            :d="generateCalligraphicPath(stroke.points, stroke.penWidth, stroke.penHeight, stroke.nibAngle)"
-            :fill="stroke.color"
-            stroke="none"
             :aria-label="getAnnotationBankLabel('trace', stroke, index)"
+            @click.stop="selectTraceFromPage(stroke, index)"
             @pointerenter="showAnnotationTooltip('trace', stroke, index, $event)"
             @pointermove="moveAnnotationTooltip($event)"
             @pointerleave="hideAnnotationTooltip"
-          />
+          >
+            <path
+              v-if="!isAnyToolActive"
+              class="trace-hit-target"
+              :d="traceCenterlinePath(stroke.points)"
+              fill="none"
+              stroke="transparent"
+              :stroke-width="Math.max(12, 18 * svgInverseScale)"
+            />
+            <path
+              class="annotation-trace"
+              :class="{ 'annotation-interactive': !isAnyToolActive }"
+              :d="generateCalligraphicPath(stroke.points, stroke.penWidth, stroke.penHeight, stroke.nibAngle)"
+              :fill="stroke.color"
+              stroke="none"
+            />
+          </g>
           <!-- Angle Construction Guides -->
           <g v-if="measureModeActive && angleGuideMousePos">
             <!-- Guide line from first point to cursor -->
@@ -466,6 +480,7 @@
           :key="'underline-' + index"
           class="underline-line"
           :class="{
+            'is-selected': isSelectedAnnotation('underline', annotation),
             'annotation-interactive': !isAnyToolActive,
             'annotation-flash': isAnnotationFlashing('underline', annotation)
           }"
@@ -478,6 +493,7 @@
             backgroundColor: 'red',
           }"
           :title="getAnnotationBankLabel('underline', annotation, index)"
+          @click.stop="selectRectAnnotationFromPage('underline', annotation, index)"
           @pointerenter="showAnnotationTooltip('underline', annotation, index, $event)"
           @pointermove="moveAnnotationTooltip($event)"
           @pointerleave="hideAnnotationTooltip"
@@ -510,11 +526,13 @@
           :key="'highlight-screen-' + (annotation.id || index)"
           class="highlight-rectangle"
           :class="{
+            'is-selected': isSelectedAnnotation('highlight', annotation),
             'annotation-interactive': !isAnyToolActive,
             'annotation-flash': isAnnotationFlashing('highlight', annotation)
           }"
           :style="getViewerRectStyle(annotation)"
           :title="getAnnotationBankLabel('highlight', annotation, index)"
+          @click.stop="selectRectAnnotationFromPage('highlight', annotation, index)"
           @pointerenter="showAnnotationTooltip('highlight', annotation, index, $event)"
           @pointermove="moveAnnotationTooltip($event)"
           @pointerleave="hideAnnotationTooltip"
@@ -559,6 +577,8 @@
         :selected-annotation="selectedAnnotationItem"
         @select-annotation="handleSelectAnnotation"
         @delete-annotation="handleDeleteAnnotation"
+        @rename-annotation="renameAnnotation"
+        @generate-page-summary="calculateWholePageStatistics"
         @generate-bands-page="calculateCurrentPage"
         @generate-bands-doc="calculateEntireDocument"
         @generate-angles="openAnglesFilterFromStats"
@@ -656,6 +676,7 @@
         <h4>Statistics</h4>
 
         <div class="panel-actions">
+          <button class="grid-btn" @click="calculateWholePageStatistics">Current Page Summary</button>
           <button class="grid-btn" @click="calculateCurrentPage">Bands: Current Page</button>
           <button class="grid-btn" @click="calculateEntireDocument">Bands: Entire Document</button>
           <button class="grid-btn" @click="openAnglesFilterFromStats">Angle Measurements…</button>
@@ -714,6 +735,7 @@
       :visible="showStatistics"
       :horizontal="horizontalStatistics"
       :vertical="verticalStatistics"
+      :summary="pageStatisticsSummary"
       @close="closeStatisticsPopup"
     />
 
@@ -794,6 +816,7 @@
         <div class="crop-header">
           <div class="zoom-cluster">
             <button class="zoom-pill" :disabled="cropZoom<=1" @click="cropZoomOut">−</button>
+            <button class="zoom-pill zoom-pill-reset" :disabled="cropZoom===1 && cropPanX===0 && cropPanY===0" @click="cropResetZoom">Reset</button>
             <button class="zoom-pill" @click="cropZoomIn">+</button>
             <span class="zoom-readout">{{ Math.round(cropZoom*100) }}%</span>
           </div>
@@ -868,6 +891,7 @@
           @mousemove="cropStageMove"
           @mouseup="cropStageUp"
           @mouseleave="cropStageUp"
+          @wheel.prevent="cropStageWheel"
           @selectstart.prevent.stop
           @dragstart.prevent.stop
           @contextmenu.prevent.stop
@@ -1099,7 +1123,6 @@
 <script>
 /* eslint-disable */
 import { PDFDocument } from "pdf-lib";
-import html2canvas from "html2canvas";
 import AnnotationsBank from "@/components/viewer/AnnotationsBank.vue";
 import ScribeDetectionPopup from "@/components/popups/ScribeDetectionPopup.vue";
 import AngleLabelPopup from "@/components/popups/AngleLabelPopup.vue";
@@ -1502,11 +1525,13 @@ export default {
       keyboardMovingAnglePageIndex: null,
       draggedLabelIndex: null,
       labelDragOffset: { x: 0, y: 0 },
+      _rectMovePersistTimer: null,
 
       // Popups and stats
       showStatistics: false,
       horizontalStatistics: {},
       verticalStatistics: {},
+      pageStatisticsSummary: null,
       showStatsPanel: false,
 
       // Cropped popup state
@@ -1562,9 +1587,9 @@ export default {
 
       // Legacy Zoom & Pan (kept for compatibility, synced from OSD)
       zoomLevel: 1,
-      zoomStep: 0.10,
+      zoomStep: 0.06,
       minZoom: 0.25,
-      maxZoom: 25,
+      maxZoom: 12,
       _holdTimer: null,      // for long-press reset
       panX: 0,
       panY: 0,
@@ -2066,9 +2091,11 @@ export default {
       };
     },
     croppedStageCursor() {
+      const toolActive = this.traceModeActive || this.measureModeActive || this.highlightModeActive || this.underlineModeActive;
+      if (toolActive) return 'crosshair';
       if (this.isCropPanning) return 'grabbing';
       if (this.cropZoom > 1) return 'grab';
-      return 'crosshair';
+      return 'default';
     },
     cropZoomLeftStyle() {
       const el = this.$refs.croppedStage;
@@ -2222,6 +2249,7 @@ export default {
     // Non-reactive comment overlay refs
     this._commentOverlayEls = [];
     this._composerOverlayEl = null;
+    this._composerAnchorOverlayEl = null;
     this._composerImageCoords = { x: 0, y: 0 };
 
     // Handle session route - load from session API
@@ -2362,6 +2390,7 @@ export default {
     // Clean up follow mode
     this.cleanupFollowSyncHandlers();
     this.cleanupFollow();
+    this._removeComposerOverlay();
 
     // Clean up OpenSeadragon
     if (this.osdViewer) {
@@ -2403,6 +2432,9 @@ export default {
     window.removeEventListener('pointercancel', this.finishBandResize);
     if (this._angleMovePersistTimer) {
       clearTimeout(this._angleMovePersistTimer);
+    }
+    if (this._rectMovePersistTimer) {
+      clearTimeout(this._rectMovePersistTimer);
     }
     if (this._bandResizePersistTimer) {
       clearTimeout(this._bandResizePersistTimer);
@@ -2564,13 +2596,13 @@ export default {
     zoomIn() {
       if (this.highlightModeActive) return;
       if (!this.osdViewer || !this.osdReady) return;
-      this.osdViewer.viewport.zoomBy(1.2);
+      this.osdViewer.viewport.zoomBy(1 + this.zoomStep);
       this.osdViewer.viewport.applyConstraints();
     },
     zoomOut() {
       if (this.highlightModeActive) return;
       if (!this.osdViewer || !this.osdReady) return;
-      this.osdViewer.viewport.zoomBy(0.83);
+      this.osdViewer.viewport.zoomBy(1 / (1 + this.zoomStep));
       this.osdViewer.viewport.applyConstraints();
     },
     resetZoom() {
@@ -2581,13 +2613,93 @@ export default {
     zoomTo(level) {
       if (this.highlightModeActive) return;
       if (!this.osdViewer || !this.osdReady) return;
-      this.osdViewer.viewport.zoomTo(level);
+      const nextZoom = Math.min(this.maxZoom, Math.max(this.minZoom, Number(level) || 1));
+      this.osdViewer.viewport.zoomTo(nextZoom);
+      this.osdViewer.viewport.applyConstraints();
     },
 
     // Right panel handlers
     handleSelectAnnotation(annotation) {
       this.selectedAnnotationItem = annotation;
       this.flashBankAnnotation(annotation);
+      const type = this.normalizeAnnotationDisplayType(annotation?.type);
+      if (type === 'highlight' || type === 'underline') {
+        this.showToolMessage(`${annotation.label} selected. Use arrow keys to move it; hold Shift for larger steps.`);
+      }
+    },
+    traceCenterlinePath(points = []) {
+      if (!Array.isArray(points) || !points.length) return '';
+      const validPoints = points
+        .map(point => ({ x: Number(point.x), y: Number(point.y) }))
+        .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+      if (!validPoints.length) return '';
+      return validPoints
+        .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
+        .join(' ');
+    },
+    selectTraceFromPage(trace, index = 0) {
+      if (this.isAnyToolActive || !trace) return;
+      const item = {
+        type: 'trace',
+        label: this.getAnnotationBankLabel('trace', trace, index),
+        data: trace,
+        index,
+      };
+      this.selectedAnnotationItem = item;
+      this.showToolMessage(`${item.label} selected.`);
+    },
+    selectRectAnnotationFromPage(type, annotation, index = 0) {
+      if (this.isAnyToolActive || !annotation) return;
+      const item = {
+        type,
+        label: this.getAnnotationBankLabel(type, annotation, index),
+        data: annotation,
+        index,
+      };
+      this.selectedAnnotationItem = item;
+      this.showToolMessage(`${item.label} selected. Use arrow keys to move it; hold Shift for larger steps.`);
+    },
+    isSelectedAnnotation(type, annotation) {
+      const selected = this.selectedAnnotationItem;
+      if (!selected?.data || !annotation) return false;
+      if (this.normalizeAnnotationDisplayType(selected.type) !== this.normalizeAnnotationDisplayType(type)) return false;
+      return annotation.id && selected.data.id
+        ? annotation.id === selected.data.id
+        : selected.data === annotation;
+    },
+    renameAnnotation(annotationItem, rawName) {
+      const target = annotationItem?.data;
+      const type = this.normalizeAnnotationDisplayType(annotationItem?.type);
+      const syncTypes = {
+        trace: 'traces',
+        highlight: 'highlights',
+        underline: 'underlines',
+      };
+      if (!target || !syncTypes[type]) return;
+      const name = String(rawName || '').trim();
+      const pageIndex = Number.isInteger(target.pageIndex) ? target.pageIndex : this.currentPage;
+      const pageAnnotations = this.annotationsByPage[pageIndex] || [];
+      const rawType = type === 'angle' ? 'measure' : type;
+      const idx = target.id
+        ? pageAnnotations.findIndex(annotation => annotation.type === rawType && annotation.id === target.id)
+        : pageAnnotations.indexOf(target);
+      if (idx === -1) return;
+
+      const updates = { name: name || null };
+      pageAnnotations[idx] = {
+        ...pageAnnotations[idx],
+        ...updates,
+      };
+      const updatedAnnotation = pageAnnotations[idx];
+      this.selectedAnnotationItem = {
+        ...annotationItem,
+        label: this.getAnnotationBankLabel(type, updatedAnnotation, annotationItem.index),
+        data: updatedAnnotation,
+      };
+
+      if (this.sessionConnected && updatedAnnotation.id) {
+        this.syncUpdateAnnotation(syncTypes[type], updatedAnnotation.id, updates, pageIndex);
+      }
     },
 
     normalizeAnnotationDisplayType(type) {
@@ -2598,9 +2710,9 @@ export default {
 
     getAnnotationBankLabel(type, annotation, index = 0) {
       const normalizedType = this.normalizeAnnotationDisplayType(type);
-      if (normalizedType === 'highlight') return `Highlight ${index + 1}`;
-      if (normalizedType === 'underline') return `Underline ${index + 1}`;
-      if (normalizedType === 'trace') return `Trace ${index + 1}`;
+      if (normalizedType === 'highlight') return annotation?.name || `Highlight ${index + 1}`;
+      if (normalizedType === 'underline') return annotation?.name || `Underline ${index + 1}`;
+      if (normalizedType === 'trace') return annotation?.name || `Trace ${index + 1}`;
       if (normalizedType === 'comment') {
         const text = annotation?.text || '';
         return text.substring(0, 25) + (text.length > 25 ? '...' : '') || `Comment ${index + 1}`;
@@ -2784,7 +2896,9 @@ export default {
     },
 
     handleAngleMoveKeyDown(event) {
-      if (!this.keyboardMovingAngleId && !this.keyboardMovingAngleRef) return;
+      const hasAngleSelection = this.keyboardMovingAngleId || this.keyboardMovingAngleRef;
+      const hasRectSelection = this.isSelectedMovableRectAnnotation();
+      if (!hasAngleSelection && !hasRectSelection) return;
 
       const target = event.target;
       const tagName = target?.tagName?.toLowerCase();
@@ -2793,7 +2907,8 @@ export default {
       if (event.key === 'Escape') {
         event.preventDefault();
         this.clearKeyboardMovingAngle();
-        this.showToolMessage('Angle move selection cleared.');
+        if (hasRectSelection) this.selectedAnnotationItem = null;
+        this.showToolMessage('Move selection cleared.');
         return;
       }
 
@@ -2809,7 +2924,72 @@ export default {
       if (!delta) return;
 
       event.preventDefault();
-      this.moveSelectedAngleBy(delta[0], delta[1]);
+      if (hasAngleSelection) {
+        this.moveSelectedAngleBy(delta[0], delta[1]);
+      } else {
+        this.moveSelectedRectAnnotationBy(delta[0], delta[1]);
+      }
+    },
+
+    isSelectedMovableRectAnnotation() {
+      const type = this.normalizeAnnotationDisplayType(this.selectedAnnotationItem?.type);
+      return type === 'highlight' || type === 'underline';
+    },
+
+    moveSelectedRectAnnotationBy(dx, dy) {
+      const item = this.selectedAnnotationItem;
+      if (!item?.data || !this.isSelectedMovableRectAnnotation()) return false;
+
+      const type = this.normalizeAnnotationDisplayType(item.type);
+      const pageIndex = Number.isInteger(item.data.pageIndex) ? item.data.pageIndex : this.currentPage;
+      if (pageIndex !== this.currentPage) return false;
+
+      const pageAnnotations = this.annotationsByPage[pageIndex] || [];
+      const index = item.data.id
+        ? pageAnnotations.findIndex(annotation => annotation?.type === type && annotation.id === item.data.id)
+        : pageAnnotations.indexOf(item.data);
+      if (index === -1) {
+        this.selectedAnnotationItem = null;
+        return false;
+      }
+
+      const annotation = pageAnnotations[index];
+      const width = Math.max(0, Number(annotation.width) || 0);
+      const height = Math.max(0, Number(annotation.height) || (type === 'underline' ? 2 : 0));
+      const imageWidth = Number(this.osdImageWidth) || 0;
+      const imageHeight = Number(this.osdImageHeight) || 0;
+      const currentX = Number(annotation.x) || 0;
+      const currentY = Number(annotation.y) || 0;
+      const nextX = imageWidth
+        ? Math.max(0, Math.min(currentX + dx, Math.max(0, imageWidth - width)))
+        : currentX + dx;
+      const nextY = imageHeight
+        ? Math.max(0, Math.min(currentY + dy, Math.max(0, imageHeight - height)))
+        : currentY + dy;
+      if (nextX === currentX && nextY === currentY) return false;
+
+      const updates = { x: nextX, y: nextY };
+      const movedAnnotation = { ...annotation, ...updates };
+      pageAnnotations.splice(index, 1, movedAnnotation);
+      this.selectedAnnotationItem = {
+        ...item,
+        label: this.getAnnotationBankLabel(type, movedAnnotation, item.index),
+        data: movedAnnotation,
+      };
+
+      const syncTypes = { highlight: 'highlights', underline: 'underlines' };
+      if (movedAnnotation.id && this.sessionConnected) {
+        this.syncUpdateAnnotation(syncTypes[type], movedAnnotation.id, updates, pageIndex);
+      } else if (this.activeSessionId) {
+        clearTimeout(this._rectMovePersistTimer);
+        this._rectMovePersistTimer = setTimeout(() => {
+          this.syncAllAnnotations(this.getAllAnnotations()).catch(error => {
+            console.error('Failed to persist annotation movement:', error);
+            this.showToolMessage('Annotation moved locally, but session sync failed.');
+          });
+        }, 250);
+      }
+      return true;
     },
 
     moveSelectedAngleBy(dx, dy) {
@@ -2991,9 +3171,10 @@ export default {
         gestureSettingsTouch: {
           pinchToZoom: true
         },
+        zoomPerScroll: 1 + this.zoomStep,
         minZoomLevel: 0.25,
-        maxZoomLevel: 25,
-        animationTime: 0,
+        maxZoomLevel: this.maxZoom,
+        animationTime: 0.15,
         visibilityRatio: 0.8,
         constrainDuringPan: true,
         autoResize: true,
@@ -4132,6 +4313,10 @@ cancelPenSelection() {
       this.showStatsPanel = false;
       this.showStatisticsPopup(this.getEntireDocumentStatistics());
     },
+    calculateWholePageStatistics() {
+      this.showStatsPanel = false;
+      this.showWholePageStatisticsPopup(this.buildWholePageStatistics(this.currentPage));
+    },
 
     openAnglesFilterFromStats() {
       this.showStatsPanel = false;          // ensure the stats panel closes
@@ -4178,7 +4363,54 @@ cancelPenSelection() {
       this.activeBandGroup = group;
       this.lengthMeasurementActive = true;
       this.isMeasuring = true;
-      this.showToolMessage(`Measuring "${this.selectedMeasurement}": click-start then click-end.`);
+      this.showToolMessage(`Measuring "${this.selectedMeasurement}": drag to select a band.`);
+    },
+
+    finalizeLengthBand() {
+      const label = this.selectedMeasurement;
+      const square = this.currentSquare;
+      const minSize = 2;
+
+      this.startPoint = null;
+      this.currentSquare = null;
+      this.lengthMeasurementActive = false;
+      this.isMeasuring = false;
+      this.activeBandGroup = null;
+      this.pendingBandGroup = null;
+      this.setOsdMouseNavEnabled(true);
+
+      if (!square || square.width < minSize || square.height < minSize || !label) {
+        this.showToolMessage("Band selection too small.");
+        return null;
+      }
+
+      if (!this.lengthMeasurements[label]) this.lengthMeasurements[label] = {};
+      if (!this.lengthMeasurements[label][this.currentPage]) this.lengthMeasurements[label][this.currentPage] = [];
+
+      const isHorizontal = this.isHorizontalLabel(label);
+      const band = {
+        ...square,
+        type: "length",
+        id: safeUUID(),
+        ...this.creationMetadata(),
+        pageIndex: this.currentPage,
+        label,
+        createdBy: this.localParticipant?.id || null,
+      };
+
+      const normalizedBand = this.normalizeBandAnnotation(band, label, this.currentPage);
+      if (!normalizedBand) return null;
+
+      this.lengthMeasurements[label][this.currentPage].push(normalizedBand);
+      this.selectedBandId = normalizedBand.id || null;
+      this.selectedBandRef = normalizedBand.id ? null : normalizedBand;
+
+      if (this.sessionConnected) {
+        this.syncAddAnnotation(isHorizontal ? 'horizontalBands' : 'verticalBands', normalizedBand);
+      }
+
+      this.showToolMessage(`${this.camelToTitle(label)} band added. Pan mode active.`);
+      return normalizedBand;
     },
 
     /* ---------- Comments (OSD overlay-based) ---------- */
@@ -4222,10 +4454,12 @@ cancelPenSelection() {
       const el = document.createElement('div');
       el.className = 'comment-composer';
       el.style.position = 'fixed';
-      el.style.left = (containerRect.left + screenPt.x) + 'px';
-      el.style.top = (containerRect.top + screenPt.y) + 'px';
+      el.style.left = (containerRect.left + screenPt.x + 22) + 'px';
+      el.style.top = (containerRect.top + screenPt.y - 14) + 'px';
       el.style.zIndex = '10000';
       el.innerHTML = `
+        <div class="comment-composer-leader" aria-hidden="true"></div>
+        <div class="comment-composer-kicker">Comment anchored here</div>
         <textarea class="composer-textarea" placeholder="Add your comment…"></textarea>
         <div class="composer-actions">
           <button class="btn-blue comment-add-btn">Add</button>
@@ -4243,6 +4477,7 @@ cancelPenSelection() {
 
       document.body.appendChild(el);
       this._composerOverlayEl = el;
+      this._showComposerAnchorOverlay();
 
       this.$nextTick(() => textarea.focus());
     },
@@ -4252,6 +4487,31 @@ cancelPenSelection() {
         try { this._composerOverlayEl.remove(); } catch(e) {}
         this._composerOverlayEl = null;
       }
+      this._removeComposerAnchorOverlay();
+    },
+
+    _showComposerAnchorOverlay() {
+      this._removeComposerAnchorOverlay();
+      const vp = this._imageToViewportPoint(this._composerImageCoords.x, this._composerImageCoords.y);
+      if (!vp || !this.osdViewer) return;
+
+      const el = document.createElement('div');
+      el.className = 'comment-anchor-preview';
+      el.innerHTML = '<span class="comment-anchor-dot"></span><span class="comment-anchor-ring"></span>';
+      this.osdViewer.addOverlay({
+        element: el,
+        location: vp,
+        placement: OpenSeadragon.Placement.CENTER,
+      });
+      this._composerAnchorOverlayEl = el;
+    },
+
+    _removeComposerAnchorOverlay() {
+      if (!this._composerAnchorOverlayEl) return;
+      try {
+        this.osdViewer?.removeOverlay(this._composerAnchorOverlayEl);
+      } catch(e) {}
+      this._composerAnchorOverlayEl = null;
     },
 
     addComment() {
@@ -4315,12 +4575,21 @@ cancelPenSelection() {
         if (this.isAnnotationFlashing('comment', c)) {
           el.classList.add('annotation-flash');
         }
-        el.innerHTML = `<div class="comment-pin-icon">💬</div>`;
+        el.innerHTML = `
+          <div class="comment-pin-icon" aria-hidden="true">
+            <span class="comment-pin-dot"></span>
+            <span class="comment-pin-glyph">“</span>
+          </div>
+        `;
 
         if (this.expandedCommentId === c.id) {
           const bubble = document.createElement('div');
           bubble.className = 'comment-expanded-bubble';
-          bubble.innerHTML = `<div class="comment-text">${this._escapeHtml(c.text)}</div>`;
+          bubble.innerHTML = `
+            <div class="comment-expanded-leader" aria-hidden="true"></div>
+            <div class="comment-expanded-kicker">Anchored comment</div>
+            <div class="comment-text">${this._escapeHtml(c.text)}</div>
+          `;
           el.appendChild(bubble);
         }
 
@@ -4521,39 +4790,59 @@ cancelPenSelection() {
 
     // JSON Export
     handleExportJson() {
-      const annotations = this.getAllAnnotations();
-      const metadata = this.getExportMetadata();
-      const settings = { angleLabels: this.angleLabels };
+      try {
+        const annotations = this.getAllAnnotations();
+        const metadata = this.getExportMetadata();
+        const settings = { angleLabels: this.angleLabels };
 
-      exportAsJson(annotations, metadata, settings, this.documentName);
-      this.showToolMessage('Exported as JSON');
+        exportAsJson(annotations, metadata, settings, this.documentName);
+        this.showToolMessage('Exported as JSON');
+      } catch (error) {
+        console.error('JSON export failed:', error);
+        this.showToolMessage('JSON export failed.');
+      }
     },
 
     // TEI XML Export
     handleExportTei() {
-      const annotations = this.getAllAnnotations();
-      const metadata = this.getExportMetadata();
+      try {
+        const annotations = this.getAllAnnotations();
+        const metadata = this.getExportMetadata();
 
-      exportAsTei(annotations, metadata, this.documentName);
-      this.showToolMessage('Exported as TEI XML');
+        exportAsTei(annotations, metadata, this.documentName);
+        this.showToolMessage('Exported as TEI XML');
+      } catch (error) {
+        console.error('TEI export failed:', error);
+        this.showToolMessage('TEI export failed.');
+      }
     },
 
     // Plain Text Export
     handleExportPlainText() {
-      const annotations = this.getAllAnnotations();
-      const metadata = this.getExportMetadata();
+      try {
+        const annotations = this.getAllAnnotations();
+        const metadata = this.getExportMetadata();
 
-      exportAsPlainText(annotations, metadata, this.documentName);
-      this.showToolMessage('Exported as Plain Text');
+        exportAsPlainText(annotations, metadata, this.documentName);
+        this.showToolMessage('Exported as Plain Text');
+      } catch (error) {
+        console.error('Plain text export failed:', error);
+        this.showToolMessage('Plain text export failed.');
+      }
     },
 
     // W3C Web Annotation Export
     handleExportWebAnnotation() {
-      const annotations = this.getAllAnnotations();
-      const metadata = this.getExportMetadata();
+      try {
+        const annotations = this.getAllAnnotations();
+        const metadata = this.getExportMetadata();
 
-      exportAsWebAnnotation(annotations, metadata, this.documentName);
-      this.showToolMessage('Exported as Web Annotation');
+        exportAsWebAnnotation(annotations, metadata, this.documentName);
+        this.showToolMessage('Exported as Web Annotation');
+      } catch (error) {
+        console.error('W3C export failed:', error);
+        this.showToolMessage('W3C export failed.');
+      }
     },
 
     // JSON Import
@@ -5105,46 +5394,14 @@ cancelPenSelection() {
         const { x, y } = this.getMousePosition(event);
         if (!this.startPoint) {
           this.startPoint = { x, y };
-          this.initialScreenX = event.clientX;
-          this.initialScreenY = event.clientY;
           this.currentSquare = {
             x, y, width: 0, height: 0,
             color: this.measurementColorFor(this.selectedMeasurement),
             label: this.selectedMeasurement,
           };
           return;
-        } else {
-          const label = this.selectedMeasurement;
-          if (!this.lengthMeasurements[label]) this.lengthMeasurements[label] = {};
-          if (!this.lengthMeasurements[label][this.currentPage]) this.lengthMeasurements[label][this.currentPage] = [];
-
-          const horizontalLabels = ['ascenders', 'descenders', 'interlinear', 'upperMargin', 'lowerMargin', 'lineHeight', 'minimumHeight', 'other_h'];
-          const isHorizontal = horizontalLabels.includes(label);
-
-          const band = {
-            ...this.currentSquare,
-            type: "length",
-            id: safeUUID(),
-            ...this.creationMetadata(),
-            pageIndex: this.currentPage,
-            label,
-            createdBy: this.localParticipant?.id || null,
-          };
-
-          const normalizedBand = this.normalizeBandAnnotation(band, label, this.currentPage);
-          if (!normalizedBand) return;
-
-          this.lengthMeasurements[label][this.currentPage].push(normalizedBand);
-
-          // Sync to session if connected
-          if (this.sessionConnected) {
-            this.syncAddAnnotation(isHorizontal ? 'horizontalBands' : 'verticalBands', normalizedBand);
-          }
-
-          this.startPoint = null;
-          this.currentSquare = null;
-          return;
         }
+        return;
       }
 
       // CROP START
@@ -5303,40 +5560,6 @@ cancelPenSelection() {
           color: this.measurementColorFor(this.selectedMeasurement),
           label: this.selectedMeasurement,
         };
-        
-        // Autoscroll/Edge panning for bands
-        if (this.osdViewer) {
-          const containerRect = this.$refs.osdContainer.getBoundingClientRect();
-          const margin = 40; // 40 pixels from edge to trigger scroll
-          const panSpeed = 0.05; // Speed of panning (viewport coordinates)
-          
-          let panDx = 0;
-          let panDy = 0;
-          
-          if (event.clientX < containerRect.left + margin) {
-            panDx = -panSpeed;
-          } else if (event.clientX > containerRect.right - margin) {
-            panDx = panSpeed;
-          }
-          
-          if (event.clientY < containerRect.top + margin) {
-            panDy = -panSpeed;
-          } else if (event.clientY > containerRect.bottom - margin) {
-            panDy = panSpeed;
-          }
-          
-          if (panDx !== 0 || panDy !== 0) {
-            const currentCenter = this.osdViewer.viewport.getCenter();
-            // Don't use enforceHighlightViewportSnapshot logic while we are intentionally panning bands
-            this.osdViewer.viewport.panTo(
-              new OpenSeadragon.Point(currentCenter.x + panDx, currentCenter.y + panDy), 
-              true // immediate
-            );
-            // After intentional pan, re-sync the startPoint so the box geometry doesn't detach visually from the mouse
-            const updatedStartPos = this.osdViewer.viewport.pixelFromPoint(this.osdViewer.viewport.viewerElementToViewportCoordinates(new OpenSeadragon.Point(this.initialScreenX, this.initialScreenY)), true);
-            this.startPoint = { x: updatedStartPos.x, y: updatedStartPos.y };
-          }
-        }
       }
 
       // TRACE dynamic
@@ -5392,6 +5615,12 @@ cancelPenSelection() {
         this.moveStartPos = null;
         this.currentMoveDelta = { x: 0, y: 0 };
         this.disableMoveMode();
+        return;
+      }
+
+      // LENGTH BAND finalize
+      if (this.lengthMeasurementActive && this.startPoint) {
+        this.finalizeLengthBand();
         return;
       }
 
@@ -5888,95 +6117,106 @@ cancelPenSelection() {
       const link = document.createElement("a");
       link.href = url;
       link.download = filename;
+      link.style.display = "none";
+      document.body.appendChild(link);
       link.click();
-      URL.revokeObjectURL(url);
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     },
-    _drawCroppedToCanvas(withAnnotations) {
-      return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-        img.onload = () => {
-          const w = img.naturalWidth;
-          const h = img.naturalHeight;
-          const canvas = document.createElement("canvas");
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(img, 0, 0, w, h);
+    async _drawCroppedToCanvas(withAnnotations) {
+      const loaded = await this.loadImageForCanvas(this.croppedImage);
+      try {
+        const img = loaded.image;
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
 
-          if (withAnnotations) {
-            const sx = w / (this.croppedBaseW || w);
-            const sy = h / (this.croppedBaseH || h);
+        if (withAnnotations) {
+          const sx = w / (this.croppedBaseW || w);
+          const sy = h / (this.croppedBaseH || h);
 
-            for (const a of this.croppedAnnotations) {
-              if (a.type === "highlight") {
-                ctx.fillStyle = "rgba(255, 255, 0, 0.3)";
-                ctx.strokeStyle = "rgba(255, 255, 0, 0.7)";
-                ctx.lineWidth = 2 * sx;
-                ctx.fillRect(a.x * sx, a.y * sy, a.width * sx, a.height * sy);
-                ctx.strokeRect(a.x * sx, a.y * sy, a.width * sx, a.height * sy);
-              } else if (a.type === "underline") {
-                ctx.strokeStyle = a.color || "#3b82f6";
-                ctx.lineWidth = (a.height || 3) * sy;
+          for (const a of this.croppedAnnotations) {
+            if (a.type === "highlight") {
+              const rect = a.rect || { left: a.x || 0, top: a.y || 0, width: a.width || 0, height: a.height || 0 };
+              ctx.fillStyle = "rgba(255, 255, 0, 0.3)";
+              ctx.strokeStyle = "rgba(255, 255, 0, 0.7)";
+              ctx.lineWidth = 2 * sx;
+              ctx.fillRect(rect.left * sx, rect.top * sy, rect.width * sx, rect.height * sy);
+              ctx.strokeRect(rect.left * sx, rect.top * sy, rect.width * sx, rect.height * sy);
+            } else if (a.type === "underline") {
+              const line = a.line || {
+                x1: a.x || 0,
+                y1: a.y || 0,
+                x2: (a.x || 0) + (a.width || 0),
+                y2: a.y || 0
+              };
+              ctx.strokeStyle = a.color || "#3b82f6";
+              ctx.lineWidth = Math.max(2, (a.height || 3) * sy);
+              ctx.beginPath();
+              ctx.moveTo(line.x1 * sx, line.y1 * sy);
+              ctx.lineTo(line.x2 * sx, line.y2 * sy);
+              ctx.stroke();
+            } else if (a.type === "trace" && Array.isArray(a.points) && a.points.length > 1) {
+              // Use calligraphic polygon for variable-width strokes
+              const polygon = generateCalligraphicPolygon(
+                a.points,
+                a.penWidth || 2,
+                a.penHeight || a.penWidth || 2,
+                a.nibAngle || 45,
+                sx,
+                sy
+              );
+              if (polygon.length > 0) {
+                ctx.fillStyle = a.color || "#000";
                 ctx.beginPath();
-                ctx.moveTo(a.x * sx, (a.y + (a.height || 3) / 2) * sy);
-                ctx.lineTo((a.x + a.width) * sx, (a.y + (a.height || 3) / 2) * sy);
+                ctx.moveTo(polygon[0].x, polygon[0].y);
+                for (let i = 1; i < polygon.length; i++) {
+                  ctx.lineTo(polygon[i].x, polygon[i].y);
+                }
+                ctx.closePath();
+                ctx.fill();
+              }
+            } else if (a.type === "measure" && Array.isArray(a.points)) {
+              ctx.strokeStyle = "blue";
+              ctx.lineWidth = 2 * sx;
+              if (a.points.length >= 2) {
+                ctx.beginPath();
+                ctx.moveTo(a.points[0].x * sx, a.points[0].y * sy);
+                ctx.lineTo(a.points[1].x * sx, a.points[1].y * sy);
                 ctx.stroke();
-              } else if (a.type === "trace" && Array.isArray(a.points) && a.points.length > 1) {
-                // Use calligraphic polygon for variable-width strokes
-                const polygon = generateCalligraphicPolygon(
-                  a.points,
-                  a.penWidth || 2,
-                  a.penHeight || a.penWidth || 2,
-                  a.nibAngle || 45,
-                  sx,
-                  sy
-                );
-                if (polygon.length > 0) {
-                  ctx.fillStyle = a.color || "#000";
-                  ctx.beginPath();
-                  ctx.moveTo(polygon[0].x, polygon[0].y);
-                  for (let i = 1; i < polygon.length; i++) {
-                    ctx.lineTo(polygon[i].x, polygon[i].y);
-                  }
-                  ctx.closePath();
-                  ctx.fill();
-                }
-              } else if (a.type === "measure" && Array.isArray(a.points)) {
-                ctx.strokeStyle = "blue";
-                ctx.lineWidth = 2 * sx;
-                if (a.points.length >= 2) {
-                  ctx.beginPath();
-                  ctx.moveTo(a.points[0].x * sx, a.points[0].y * sy);
-                  ctx.lineTo(a.points[1].x * sx, a.points[1].y * sy);
-                  ctx.stroke();
-                }
-                if (a.points.length === 3) {
-                  ctx.beginPath();
-                  ctx.moveTo(a.points[1].x * sx, a.points[1].y * sy);
-                  ctx.lineTo(a.points[2].x * sx, a.points[2].y * sy);
-                  ctx.stroke();
-                  const lx = a.points[1].x * sx + 10 * sx;
-                  const ly = a.points[1].y * sy - 10 * sy;
-                  ctx.font = `bold ${16 * sx}px sans-serif`;
-                  ctx.fillStyle = "#00ff87";
-                  ctx.strokeStyle = "#000";
-                  ctx.lineWidth = 0.5 * sx;
-                  const label = `${a.angle}°${a.label ? ' • ' + a.label : ''}`;
-                  ctx.strokeText(label, lx, ly);
-                  ctx.fillText(label, lx, ly);
-                }
+              }
+              if (a.points.length === 3) {
+                ctx.beginPath();
+                ctx.moveTo(a.points[1].x * sx, a.points[1].y * sy);
+                ctx.lineTo(a.points[2].x * sx, a.points[2].y * sy);
+                ctx.stroke();
+                const lx = a.points[1].x * sx + 10 * sx;
+                const ly = a.points[1].y * sy - 10 * sy;
+                ctx.font = `bold ${16 * sx}px sans-serif`;
+                ctx.fillStyle = "#00ff87";
+                ctx.strokeStyle = "#000";
+                ctx.lineWidth = 0.5 * sx;
+                const label = `${a.angle}°${a.label ? ' • ' + a.label : ''}`;
+                ctx.strokeText(label, lx, ly);
+                ctx.fillText(label, lx, ly);
               }
             }
           }
+        }
+
+        return await new Promise((resolve, reject) => {
           canvas.toBlob((blob) => {
             if (blob) resolve(blob);
             else reject(new Error("Canvas toBlob failed"));
           }, "image/png");
-        };
-        img.onerror = () => reject(new Error("Failed to load image"));
-        img.src = this.croppedImage;
-      });
+        });
+      } finally {
+        loaded.revoke?.();
+      }
     },
     async saveCroppedImageAsPNG() {
       try {
@@ -6219,11 +6459,52 @@ cancelPenSelection() {
 
     // Cropped zoom/pan methods
     cropZoomIn() {
-      this.cropZoom = Math.min(4, +(this.cropZoom + this.cropZoomStep).toFixed(2));
-      this._clampCropPan();
+      const stage = this.$refs.croppedStage;
+      const rect = stage?.getBoundingClientRect();
+      this.zoomCropAt(1 + this.cropZoomStep, rect ? rect.left + rect.width / 2 : null, rect ? rect.top + rect.height / 2 : null);
     },
     cropZoomOut() {
-      this.cropZoom = Math.max(1, +(this.cropZoom - this.cropZoomStep).toFixed(2));
+      const stage = this.$refs.croppedStage;
+      const rect = stage?.getBoundingClientRect();
+      this.zoomCropAt(1 / (1 + this.cropZoomStep), rect ? rect.left + rect.width / 2 : null, rect ? rect.top + rect.height / 2 : null);
+    },
+    cropResetZoom() {
+      this.cropZoom = 1;
+      this.cropPanX = 0;
+      this.cropPanY = 0;
+      this.isCropPanning = false;
+      this._cPanStart = null;
+    },
+    cropStageWheel(event) {
+      const toolActive = this.traceModeActive || this.measureModeActive || this.highlightModeActive || this.underlineModeActive;
+      if (toolActive) return;
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+      this.zoomCropAt(factor, event.clientX, event.clientY);
+    },
+    zoomCropAt(factor, clientX = null, clientY = null) {
+      const oldZoom = this.cropZoom || 1;
+      const nextZoom = Math.max(1, Math.min(4, +(oldZoom * factor).toFixed(3)));
+      if (nextZoom === oldZoom) {
+        this._clampCropPan();
+        return;
+      }
+
+      const stage = this.$refs.croppedStage;
+      const rect = stage?.getBoundingClientRect();
+      if (!rect || clientX == null || clientY == null) {
+        this.cropZoom = nextZoom;
+        this._clampCropPan();
+        return;
+      }
+
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const imageX = (clientX - centerX - this.cropPanX) / oldZoom + this.croppedBaseW / 2;
+      const imageY = (clientY - centerY - this.cropPanY) / oldZoom + this.croppedBaseH / 2;
+
+      this.cropZoom = nextZoom;
+      this.cropPanX = clientX - centerX - (imageX - this.croppedBaseW / 2) * nextZoom;
+      this.cropPanY = clientY - centerY - (imageY - this.croppedBaseH / 2) * nextZoom;
       this._clampCropPan();
     },
     _clampCropPan() {
@@ -6570,70 +6851,317 @@ cancelPenSelection() {
     },
 
     /* ---------- Save to PDF ---------- */
-    async saveAnnotations() {
+    exportPageHasContent(pageIndex) {
+      const annotations = this.annotationsByPage[pageIndex] || [];
+      const comments = this.comments[pageIndex] || [];
+      const hasLengths = Object.values(this.lengthMeasurements).some(obj => (obj?.[pageIndex] || []).length > 0);
+      return annotations.length > 0 || comments.length > 0 || hasLengths;
+    },
+    getPageLengthMeasurementsForExport(pageIndex) {
+      const measurements = [];
+      Object.values(this.lengthMeasurements).forEach(pages => {
+        const pageMeasurements = pages?.[pageIndex];
+        if (Array.isArray(pageMeasurements)) measurements.push(...pageMeasurements);
+      });
+      return measurements;
+    },
+    safeExportFilename(extension) {
+      const safeName = (this.documentName || 'annotated-document')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .substring(0, 50) || 'annotated-document';
+      const date = new Date().toISOString().slice(0, 10);
+      return `${safeName}_${date}.${extension}`;
+    },
+    async loadImageForCanvas(url) {
+      if (!url) throw new Error('Missing image URL');
+
+      let objectUrl = null;
+      let loadUrl = url;
       try {
-        const topBar = document.querySelector(".top-bar");
-        const navigationBar = document.querySelector(".navigation-bar");
-        // cache previous inline visibility (not computed style) so we can restore exactly
-        const prevTopVis = topBar ? topBar.style.visibility : "";
-        const prevNavVis = navigationBar ? navigationBar.style.visibility : "";
-        // cache scroll positions (window + stage)
-        const winScroll = { x: window.scrollX, y: window.scrollY };
-        const viewerEl = this.$refs.viewer;
-        const viewerScroll = viewerEl
-          ? { left: viewerEl.scrollLeft, top: viewerEl.scrollTop }
-          : null;
+        const response = await fetch(url, { mode: 'cors', cache: 'force-cache' });
+        if (response.ok) {
+          const blob = await response.blob();
+          objectUrl = URL.createObjectURL(blob);
+          loadUrl = objectUrl;
+        }
+      } catch (error) {
+        console.warn('Fetch image for export failed; trying direct image load.', error);
+      }
 
-        // hide without collapsing layout (prevents reflow/width jumps)
-        if (topBar) topBar.style.visibility = "hidden";
-        if (navigationBar) navigationBar.style.visibility = "hidden";
+      const image = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.decoding = 'async';
+        const timer = window.setTimeout(() => reject(new Error('Timed out loading image for export')), 30000);
+        img.onload = () => {
+          window.clearTimeout(timer);
+          resolve(img);
+        };
+        img.onerror = () => {
+          window.clearTimeout(timer);
+          reject(new Error('Failed to load image for export'));
+        };
+        img.src = loadUrl;
+      });
 
+      return {
+        image,
+        revoke: () => {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+        }
+      };
+    },
+    async getExportSourceDimensions(imageUrl, image) {
+      const serviceId = extractServiceId(imageUrl);
+      if (serviceId) {
+        try {
+          const info = await fetchImageInfo(serviceId);
+          const width = Number(info?.width);
+          const height = Number(info?.height);
+          if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+            return { width, height };
+          }
+        } catch (error) {
+          console.warn('Could not read IIIF dimensions for export; using loaded image size.', error);
+        }
+      }
+
+      const naturalWidth = Number(image?.naturalWidth);
+      const naturalHeight = Number(image?.naturalHeight);
+      if (Number.isFinite(naturalWidth) && naturalWidth > 0 && Number.isFinite(naturalHeight) && naturalHeight > 0) {
+        return { width: naturalWidth, height: naturalHeight };
+      }
+
+      return {
+        width: Number(this.osdImageWidth) || 1200,
+        height: Number(this.osdImageHeight) || 1600
+      };
+    },
+    buildExportCanvas(width, height) {
+      const maxDimension = 2400;
+      const scale = Math.min(1, maxDimension / Math.max(width || 1, height || 1));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      return { canvas, scale };
+    },
+    drawExportLabel(ctx, text, x, y, options = {}) {
+      const fontSize = options.fontSize || 24;
+      ctx.save();
+      ctx.font = `700 ${fontSize}px sans-serif`;
+      ctx.textBaseline = 'top';
+      const paddingX = 8;
+      const paddingY = 5;
+      const metrics = ctx.measureText(text);
+      const boxWidth = metrics.width + paddingX * 2;
+      const boxHeight = fontSize + paddingY * 2;
+      ctx.fillStyle = options.background || 'rgba(255,255,255,0.88)';
+      ctx.fillRect(x, y, boxWidth, boxHeight);
+      ctx.strokeStyle = options.border || 'rgba(0,0,0,0.18)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, boxWidth, boxHeight);
+      ctx.fillStyle = options.color || '#111827';
+      ctx.fillText(text, x + paddingX, y + paddingY);
+      ctx.restore();
+    },
+    drawExportAnnotations(ctx, pageIndex, sourceWidth, sourceHeight) {
+      const annotations = this.annotationsByPage[pageIndex] || [];
+      const comments = this.comments[pageIndex] || [];
+      const measurements = this.getPageLengthMeasurementsForExport(pageIndex);
+
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      annotations.forEach((annotation, index) => {
+        if (annotation.type === 'highlight') {
+          ctx.fillStyle = annotation.color || 'rgba(255, 235, 59, 0.32)';
+          ctx.strokeStyle = 'rgba(202, 138, 4, 0.85)';
+          ctx.lineWidth = 3;
+          ctx.fillRect(annotation.x || 0, annotation.y || 0, annotation.width || 0, annotation.height || 0);
+          ctx.strokeRect(annotation.x || 0, annotation.y || 0, annotation.width || 0, annotation.height || 0);
+          if (annotation.name) {
+            this.drawExportLabel(
+              ctx,
+              this.getAnnotationBankLabel('highlight', annotation, index),
+              Math.max(0, (annotation.x || 0) + 8),
+              Math.max(0, (annotation.y || 0) - 30),
+              { fontSize: 18, color: '#854d0e' }
+            );
+          }
+          return;
+        }
+
+        if (annotation.type === 'underline') {
+          const y = (annotation.y || 0) + Math.max(1, (annotation.height || 2) / 2);
+          ctx.strokeStyle = annotation.color || '#dc2626';
+          ctx.lineWidth = Math.max(3, annotation.height || 3);
+          ctx.beginPath();
+          ctx.moveTo(annotation.x || 0, y);
+          ctx.lineTo((annotation.x || 0) + (annotation.width || 0), y);
+          ctx.stroke();
+          if (annotation.name) {
+            this.drawExportLabel(
+              ctx,
+              this.getAnnotationBankLabel('underline', annotation, index),
+              Math.max(0, annotation.x || 0),
+              Math.max(0, (annotation.y || 0) - 30),
+              { fontSize: 18, color: '#991b1b' }
+            );
+          }
+          return;
+        }
+
+        if (annotation.type === 'trace' && Array.isArray(annotation.points) && annotation.points.length > 1) {
+          const polygon = generateCalligraphicPolygon(
+            annotation.points,
+            annotation.penWidth || 2,
+            annotation.penHeight || annotation.penWidth || 2,
+            annotation.nibAngle || 45
+          );
+          if (!polygon.length) return;
+          ctx.fillStyle = annotation.color || '#111827';
+          ctx.beginPath();
+          ctx.moveTo(polygon[0].x, polygon[0].y);
+          polygon.slice(1).forEach(point => ctx.lineTo(point.x, point.y));
+          ctx.closePath();
+          ctx.fill();
+          if (annotation.name) {
+            const firstPoint = annotation.points[0];
+            this.drawExportLabel(
+              ctx,
+              this.getAnnotationBankLabel('trace', annotation, index),
+              Math.max(0, (Number(firstPoint.x) || 0) + 10),
+              Math.max(0, (Number(firstPoint.y) || 0) - 30),
+              { fontSize: 18 }
+            );
+          }
+          return;
+        }
+
+        if (annotation.type === 'measure' && Array.isArray(annotation.points) && annotation.points.length >= 2) {
+          ctx.strokeStyle = '#1d4ed8';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
+          ctx.lineTo(annotation.points[1].x, annotation.points[1].y);
+          if (annotation.points.length === 3) {
+            ctx.moveTo(annotation.points[1].x, annotation.points[1].y);
+            ctx.lineTo(annotation.points[2].x, annotation.points[2].y);
+          }
+          ctx.stroke();
+          if (annotation.points.length === 3) {
+            this.drawExportLabel(
+              ctx,
+              `${annotation.angle || this.calculateAngle(annotation.points[0], annotation.points[1], annotation.points[2])}°${annotation.label ? ' • ' + annotation.label : ''}`,
+              annotation.points[1].x + 12,
+              Math.max(0, annotation.points[1].y - 34),
+              { color: '#065f46', fontSize: 22 }
+            );
+          }
+        }
+      });
+
+      measurements.forEach(measurement => {
+        ctx.fillStyle = measurement.color || this.measurementColorFor(measurement.label);
+        ctx.strokeStyle = this.measurementBorderFor(measurement);
+        ctx.lineWidth = 4;
+        ctx.fillRect(measurement.x || 0, measurement.y || 0, measurement.width || 0, measurement.height || 0);
+        ctx.strokeRect(measurement.x || 0, measurement.y || 0, measurement.width || 0, measurement.height || 0);
+        const size = this.isHorizontalLabel(measurement.label) ? measurement.height : measurement.width;
+        this.drawExportLabel(
+          ctx,
+          `${this.camelToTitle(measurement.label)}: ${Math.round(size || 0)} px`,
+          Math.min(sourceWidth - 20, (measurement.x || 0) + 12),
+          Math.min(sourceHeight - 20, (measurement.y || 0) + 12),
+          { fontSize: 20 }
+        );
+      });
+
+      comments.forEach((comment, index) => {
+        const x = Number(comment.x) || 0;
+        const y = Number(comment.y) || 0;
+        ctx.fillStyle = '#2563eb';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(x, y, 14, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        this.drawExportLabel(ctx, comment.text || `Comment ${index + 1}`, x + 18, y + 8, { fontSize: 20 });
+      });
+
+      ctx.restore();
+    },
+    async renderAnnotatedPageCanvas(pageIndex) {
+      const imageUrl = this.images[pageIndex];
+      let loaded = null;
+      let sourceDimensions = null;
+
+      try {
+        loaded = await this.loadImageForCanvas(imageUrl);
+        sourceDimensions = await this.getExportSourceDimensions(imageUrl, loaded.image);
+      } catch (error) {
+        console.warn(`Page ${pageIndex + 1} image could not be loaded for export; rendering annotations on blank page.`, error);
+        sourceDimensions = { width: Number(this.osdImageWidth) || 1200, height: Number(this.osdImageHeight) || 1600 };
+      }
+
+      const { width: sourceWidth, height: sourceHeight } = sourceDimensions;
+      const { canvas, scale } = this.buildExportCanvas(sourceWidth, sourceHeight);
+      const ctx = canvas.getContext('2d');
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      if (loaded?.image) {
+        ctx.drawImage(loaded.image, 0, 0, canvas.width, canvas.height);
+      } else {
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+        this.drawExportLabel(ctx, `Page ${pageIndex + 1} image unavailable`, 32, 32, { fontSize: 28 });
+      }
+
+      ctx.save();
+      ctx.scale(scale, scale);
+      this.drawExportAnnotations(ctx, pageIndex, sourceWidth, sourceHeight);
+      ctx.restore();
+      loaded?.revoke?.();
+
+      return canvas;
+    },
+    async saveAnnotations() {
+      const pagesToExport = this.images.map((_, pageIndex) => pageIndex);
+
+      if (!pagesToExport.length) {
+        this.showToolMessage('No document pages to export.');
+        return;
+      }
+
+      this.showToolMessage('Preparing full annotated PDF...');
+
+      try {
         const pdfDoc = await PDFDocument.create();
 
-        for (let i = 0; i < this.images.length; i++) {
-          const annotations = this.annotationsByPage[i] || [];
-          const comments = this.comments[i] || [];
-          const hasLengths = Object.values(this.lengthMeasurements).some(obj => (obj[i] || []).length > 0);
-
-          if (annotations.length === 0 && comments.length === 0 && !hasLengths) continue;
-
-          this.currentPage = i;
-          await this.$nextTick();
-
-          const viewer = this.$refs.viewer;
-          const canvas = await html2canvas(viewer, {
-            scale: 2,
-            useCORS: true,
-            logging: false,
-            ignoreElements: (el) =>
-              el.classList?.contains("top-bar") ||
-              el.classList?.contains("navigation-bar")
-          });
-
-          const imgData = canvas.toDataURL("image/png");
+        for (const pageIndex of pagesToExport) {
+          const canvas = await this.renderAnnotatedPageCanvas(pageIndex);
+          const imgData = canvas.toDataURL('image/png');
           const image = await pdfDoc.embedPng(imgData);
           const page = pdfDoc.addPage([image.width, image.height]);
           page.drawImage(image, { x: 0, y: 0, width: image.width, height: image.height });
         }
 
         const pdfBytes = await pdfDoc.save();
-        const blob = new Blob([pdfBytes], { type: "application/pdf" });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = "annotated-document.pdf";
-        link.click();
-        URL.revokeObjectURL(link.href);
-
-        // restore visibility and scroll positions exactly as before
-        if (topBar) topBar.style.visibility = prevTopVis;
-        if (navigationBar) navigationBar.style.visibility = prevNavVis;
-        if (viewerEl && viewerScroll) {
-          viewerEl.scrollLeft = viewerScroll.left;
-          viewerEl.scrollTop = viewerScroll.top;
-        }
-        window.scrollTo(winScroll.x, winScroll.y);
-      } catch (e) {
-        console.error("Error saving annotations:", e);
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+        this._downloadBlob(blob, this.safeExportFilename('pdf'));
+        this.showToolMessage(`Full annotated PDF exported (${pagesToExport.length} page${pagesToExport.length === 1 ? '' : 's'}).`);
+      } catch (error) {
+        console.error('Error saving annotated PDF:', error);
+        this.showToolMessage('PDF export failed. Check the console for details.');
       }
     },
 
@@ -6708,6 +7236,125 @@ cancelPenSelection() {
         angles: (values || []).map((v) => (Number.isFinite(v) ? Number(v.toFixed(2)) : v)),
       };
     },
+    distanceBetweenPoints(a, b) {
+      if (!a || !b) return 0;
+      const x1 = Number(a.x);
+      const y1 = Number(a.y);
+      const x2 = Number(b.x);
+      const y2 = Number(b.y);
+      if (![x1, y1, x2, y2].every(Number.isFinite)) return 0;
+      return Math.hypot(x2 - x1, y2 - y1);
+    },
+    polylineLength(points = []) {
+      if (!Array.isArray(points) || points.length < 2) return 0;
+      return points.reduce((total, point, index) => {
+        if (index === 0) return total;
+        return total + this.distanceBetweenPoints(points[index - 1], point);
+      }, 0);
+    },
+    annotationWidth(annotation) {
+      if (!annotation) return 0;
+      if (Number.isFinite(Number(annotation.width))) return Math.abs(Number(annotation.width));
+      if (annotation.line) {
+        return Math.abs((Number(annotation.line.x2) || 0) - (Number(annotation.line.x1) || 0));
+      }
+      return 0;
+    },
+    annotationHeight(annotation) {
+      if (!annotation) return 0;
+      if (Number.isFinite(Number(annotation.height))) return Math.abs(Number(annotation.height));
+      if (annotation.line) {
+        return Math.abs((Number(annotation.line.y2) || 0) - (Number(annotation.line.y1) || 0));
+      }
+      return 0;
+    },
+    measurementRow(label, values = [], unit = 'px') {
+      const numericValues = (values || []).map(Number).filter((value) => Number.isFinite(value) && value > 0);
+      const summary = this.summarizeNumbers(numericValues);
+      if (!summary.count) return null;
+      const total = numericValues.reduce((sum, value) => sum + value, 0);
+      return {
+        label,
+        unit,
+        count: summary.count,
+        mean: summary.mean,
+        total: Number(total.toFixed(2)),
+        min: summary.min,
+        max: summary.max,
+      };
+    },
+    buildWholePageStatistics(pageIndex = this.currentPage) {
+      const annotations = this.annotationsByPage[pageIndex] || [];
+      const comments = this.comments[pageIndex] || [];
+      const bands = this.getPageLengthMeasurementsForExport(pageIndex);
+      const highlights = annotations.filter((annotation) => annotation?.type === 'highlight');
+      const underlines = annotations.filter((annotation) => annotation?.type === 'underline');
+      const traces = annotations.filter((annotation) => annotation?.type === 'trace');
+      const angles = annotations.filter((annotation) => annotation?.type === 'measure');
+      const horizontalBands = bands.filter((band) => this.isHorizontalLabel(band?.label));
+      const verticalBands = bands.filter((band) => !this.isHorizontalLabel(band?.label));
+      const totalAnnotations = annotations.length + comments.length + bands.length;
+
+      const rows = [
+        this.measurementRow(
+          'Highlight area',
+          highlights.map((annotation) => this.annotationWidth(annotation) * this.annotationHeight(annotation)),
+          'px²'
+        ),
+        this.measurementRow(
+          'Underline length',
+          underlines.map((annotation) => {
+            if (annotation.line) {
+              return this.distanceBetweenPoints(
+                { x: annotation.line.x1, y: annotation.line.y1 },
+                { x: annotation.line.x2, y: annotation.line.y2 }
+              );
+            }
+            return Math.max(this.annotationWidth(annotation), this.annotationHeight(annotation));
+          }),
+          'px'
+        ),
+        this.measurementRow(
+          'Trace path length',
+          traces.map((annotation) => this.polylineLength(annotation.points)),
+          'px'
+        ),
+        this.measurementRow(
+          'Trace points',
+          traces.map((annotation) => Array.isArray(annotation.points) ? annotation.points.length : 0),
+          'pts'
+        ),
+        this.measurementRow(
+          'Angles',
+          angles.map((annotation) => this.getAngleValueFromAnnotation(annotation)).filter(Number.isFinite),
+          '°'
+        ),
+        this.measurementRow(
+          'Horizontal band height',
+          horizontalBands.map((band) => this.annotationHeight(band)),
+          'px'
+        ),
+        this.measurementRow(
+          'Vertical band width',
+          verticalBands.map((band) => this.annotationWidth(band)),
+          'px'
+        ),
+      ].filter(Boolean);
+
+      return {
+        title: `Current Page Summary: Page ${pageIndex + 1}`,
+        counts: [
+          { label: 'Total', value: totalAnnotations },
+          { label: 'Highlights', value: highlights.length },
+          { label: 'Underlines', value: underlines.length },
+          { label: 'Traces', value: traces.length },
+          { label: 'Angles', value: angles.length },
+          { label: 'Comments', value: comments.length },
+          { label: 'Bands', value: bands.length },
+        ],
+        measurements: rows,
+      };
+    },
     buildLengthStatisticsForPages(pages = []) {
       const horizontal = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight","other_h"];
       const vertical = ["internalMargin","intercolumnSpaces","externalMargin","other_v"];
@@ -6739,6 +7386,7 @@ cancelPenSelection() {
     showStatisticsPopup(statistics) {
       this.horizontalStatistics = {};
       this.verticalStatistics = {};
+      this.pageStatisticsSummary = null;
       const horizontal = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight","other_h"];
       const vertical = ["internalMargin","intercolumnSpaces","externalMargin","other_v"];
       for (const [type, stats] of Object.entries(statistics)) {
@@ -6750,8 +7398,15 @@ cancelPenSelection() {
       }
       this.showStatistics = true;
     },
+    showWholePageStatisticsPopup(summary) {
+      this.horizontalStatistics = {};
+      this.verticalStatistics = {};
+      this.pageStatisticsSummary = summary;
+      this.showStatistics = true;
+    },
     closeStatisticsPopup() {
       this.showStatistics = false;
+      this.pageStatisticsSummary = null;
     },
     getCurrentPageStatistics() {
       return this.buildLengthStatisticsForPages([this.currentPage]);
@@ -6950,6 +7605,16 @@ cancelPenSelection() {
   cursor: pointer;
 }
 
+.annotation-overlay .drawing-layer .trace-selection-group {
+  pointer-events: auto !important;
+  cursor: pointer;
+}
+
+.annotation-overlay .drawing-layer .trace-hit-target {
+  pointer-events: stroke !important;
+  cursor: pointer;
+}
+
 .annotation-interactive {
   pointer-events: auto !important;
   cursor: help;
@@ -6957,12 +7622,30 @@ cancelPenSelection() {
 
 .annotation-overlay .drawing-layer .annotation-interactive {
   pointer-events: painted !important;
+  cursor: pointer;
 }
 
 .underline-line.annotation-interactive::before {
   content: '';
   position: absolute;
   inset: -5px 0;
+}
+
+.highlight-rectangle.annotation-interactive,
+.underline-line.annotation-interactive {
+  pointer-events: auto !important;
+  cursor: pointer;
+}
+
+.highlight-rectangle.is-selected,
+.underline-line.is-selected {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 3px;
+  box-shadow: 0 0 0 4px hsl(var(--primary) / 0.18), 0 0 16px hsl(var(--primary) / 0.38);
+}
+
+.underline-line.is-selected {
+  height: 4px !important;
 }
 
 .annotation-flash {
@@ -6985,6 +7668,13 @@ cancelPenSelection() {
 
 .annotation-overlay .drawing-layer .annotation-trace.annotation-flash {
   filter: drop-shadow(0 0 4px #fff) drop-shadow(0 0 9px #facc15);
+}
+
+.annotation-overlay .drawing-layer .trace-selection-group.is-selected .annotation-trace {
+  filter: drop-shadow(0 0 3px hsl(var(--background))) drop-shadow(0 0 8px hsl(var(--primary)));
+  stroke: hsl(var(--primary));
+  stroke-width: 2px;
+  paint-order: stroke fill;
 }
 
 @keyframes annotation-light-pulse {
@@ -7972,6 +8662,12 @@ div.statistics-popup,
   transform: none;
   box-shadow: none;
 }
+.zoom-pill-reset {
+  width: auto;
+  min-width: 58px;
+  padding: 0 10px;
+  font-size: 12px;
+}
 .zoom-readout {
   display: flex;
   align-items: center;
@@ -8219,21 +8915,56 @@ div.statistics-popup,
 .comment-pin-wrapper {
   cursor: pointer;
   pointer-events: auto;
+  position: relative;
+  width: 32px;
+  height: 32px;
 }
 .comment-pin-icon {
-  width: 28px;
-  height: 28px;
+  position: relative;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: hsl(var(--primary));
-  color: white;
-  font-size: 14px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-  transition: transform 0.15s ease;
+  background:
+    radial-gradient(circle at 50% 50%, hsl(var(--background)) 0 31%, transparent 32%),
+    hsl(var(--primary));
+  border: 2px solid hsl(var(--background));
+  color: hsl(var(--primary-foreground));
+  box-shadow: 0 8px 18px rgba(0,0,0,0.28), 0 0 0 1px hsl(var(--primary) / 0.35);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .comment-pin-icon:hover {
-  transform: scale(1.15);
+  transform: scale(1.1);
+  box-shadow: 0 10px 22px rgba(0,0,0,0.32), 0 0 0 4px hsl(var(--primary) / 0.18);
+}
+.comment-pin-icon::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  width: 2px;
+  height: 8px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: hsl(var(--primary));
+  box-shadow: 0 0 0 1px hsl(var(--background));
+}
+.comment-pin-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  box-shadow: 0 0 0 3px hsl(var(--background));
+}
+.comment-pin-glyph {
+  position: absolute;
+  top: 0;
+  right: 6px;
+  color: hsl(var(--primary-foreground));
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
 }
 .comment-pin-wrapper.annotation-flash .comment-pin-icon {
   outline: 3px solid #facc15;
@@ -8246,31 +8977,103 @@ div.statistics-popup,
 }
 .comment-expanded-bubble {
   position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  margin-top: 6px;
-  width: 220px;
+  top: 10px;
+  left: 42px;
+  width: 250px;
   background: hsl(var(--card));
   border: 1px solid hsl(var(--border));
-  border-radius: 10px;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.15);
-  padding: 8px 10px;
+  border-radius: 8px;
+  box-shadow: 0 14px 32px rgba(0,0,0,0.22);
+  padding: 10px 12px;
   pointer-events: auto;
+}
+.comment-expanded-leader {
+  position: absolute;
+  left: -34px;
+  top: 15px;
+  width: 34px;
+  height: 2px;
+  background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--border)));
+  pointer-events: none;
+}
+.comment-expanded-leader::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+}
+.comment-expanded-kicker,
+.comment-composer-kicker {
+  margin-bottom: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 .comment-text {
   font-size: 13px;
   color: hsl(var(--foreground));
   line-height: 1.35;
+  white-space: pre-wrap;
 }
 .comment-composer {
   width: 260px;
+  position: relative;
   background: hsl(var(--card));
   border: 1px solid hsl(var(--border));
-  border-radius: 12px;
+  border-radius: 8px;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
-  padding: 10px;
+  padding: 12px;
   pointer-events: auto;
+}
+.comment-composer-leader {
+  position: absolute;
+  left: -24px;
+  top: 27px;
+  width: 24px;
+  height: 2px;
+  background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--border)));
+  pointer-events: none;
+}
+.comment-composer-leader::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: -4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  box-shadow: 0 0 0 3px hsl(var(--background));
+}
+.comment-anchor-preview {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  pointer-events: none;
+}
+.comment-anchor-dot {
+  position: absolute;
+  inset: 10px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  box-shadow: 0 0 0 4px hsl(var(--background)), 0 6px 14px rgba(0,0,0,0.28);
+}
+.comment-anchor-ring {
+  position: absolute;
+  inset: 1px;
+  border-radius: 50%;
+  border: 2px solid hsl(var(--primary));
+  animation: comment-anchor-pulse 1.15s ease-out infinite;
+}
+@keyframes comment-anchor-pulse {
+  from { opacity: 0.9; transform: scale(0.72); }
+  to { opacity: 0; transform: scale(1.35); }
 }
 .composer-textarea {
   width: 100%;

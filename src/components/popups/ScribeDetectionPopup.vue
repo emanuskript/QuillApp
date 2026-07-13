@@ -26,6 +26,19 @@
       <section v-if="step===1" class="step-pane">
         <p class="helper">How should we pick the lines to compare?</p>
 
+        <div class="algorithm-disclosure">
+          <div>
+            <div class="algorithm-kicker">Calculation model</div>
+            <strong>PharoSight handwriting-feature pipeline</strong>
+          </div>
+          <p>
+            The analysis extracts line-level handwriting features after image preprocessing
+            (Sauvola binarization, stroke/spacing/slant measurements), then detects hand changes
+            with the selected change-point algorithm. Auto chooses between Peaks and Ruptures from
+            the manuscript data.
+          </p>
+        </div>
+
         <div class="method-grid" data-scribe-tour="method-grid">
           <!-- Option 1 -->
           <button class="method-card"
@@ -57,6 +70,12 @@
           <div class="draw-toolbar" data-scribe-tour="draw-toolbar">
             <div>Boxes selected: <strong>{{ regions.length }}</strong></div>
             <div class="spacer"></div>
+            <div class="zoom-controls" aria-label="Manual preview zoom controls">
+              <button class="zoom-chip" @click="zoomScribeView('draw', -1)" :disabled="drawZoom <= 1">−</button>
+              <button class="zoom-chip zoom-chip-reset" @click="resetScribeView('draw')" :disabled="drawZoom === 1 && drawPanX === 0 && drawPanY === 0">Reset</button>
+              <button class="zoom-chip" @click="zoomScribeView('draw', 1)">+</button>
+              <span class="zoom-chip-readout">{{ Math.round(drawZoom * 100) }}%</span>
+            </div>
             <button class="pill" @click="clearRegions" :disabled="regions.length===0">Clear</button>
             <button class="pill" @click="toggleDraw">
               {{ drawActive ? 'Stop Drawing' : 'Start Drawing' }}
@@ -64,19 +83,31 @@
           </div>
 
           <!-- The same image you show in the viewer popup; use a fitted container -->
-          <div class="draw-stage" ref="drawStage" data-scribe-tour="draw-stage">
-            <img v-if="drawImageSrc" :src="drawImageSrc" :key="drawImageSrc" alt="Manuscript page"
-                 class="draw-img" draggable="false"
-                 @load="onDrawImgLoad"
-                 @mousedown="onImgDown"
-                 @mousemove="onImgMove"
-                 @mouseup="onImgUp"
-                 @mouseleave="onImgUp" />
-            <!-- existing rectangles -->
-            <div v-for="(r, i) in regions" :key="i" class="box"
-                 :style="boxStyle(r)"></div>
-            <!-- live rectangle -->
-            <div v-if="liveBox" class="box live" :style="boxStyle(liveBox)"></div>
+          <div
+            class="draw-stage"
+            ref="drawStage"
+            data-scribe-tour="draw-stage"
+            :style="{ cursor: drawStageCursor }"
+            @mousedown="onScribePanDown($event, 'draw')"
+            @mousemove="onScribePanMove($event, 'draw')"
+            @mouseup="onScribePanUp('draw')"
+            @mouseleave="onScribePanUp('draw')"
+            @wheel.prevent="onScribeStageWheel($event, 'draw')"
+          >
+            <div class="scribe-zoom-layer" :style="drawZoomLayerStyle">
+              <img v-if="drawImageSrc" :src="drawImageSrc" :key="drawImageSrc" alt="Manuscript page"
+                   class="draw-img" draggable="false"
+                   @load="onDrawImgLoad"
+                   @mousedown="onImgDown"
+                   @mousemove="onImgMove"
+                   @mouseup="onImgUp"
+                   @mouseleave="onImgUp" />
+              <!-- existing rectangles -->
+              <div v-for="(r, i) in regions" :key="i" class="box"
+                   :style="boxStyle(r)"></div>
+              <!-- live rectangle -->
+              <div v-if="liveBox" class="box live" :style="boxStyle(liveBox)"></div>
+            </div>
           </div>
 
           <p class="hint">
@@ -140,12 +171,29 @@
           <!-- Show preview of page with detected regions -->
           <div v-if="uploadedJsonFile && !jsonParseError && jsonImagePreview" class="json-preview-wrap" data-scribe-tour="json-preview">
             <p class="preview-label">Preview: Detected line regions</p>
-            <div class="draw-stage">
-              <img :src="jsonImagePreview" alt="Manuscript page"
-                   class="draw-img" draggable="false" ref="jsonPreviewImg" />
-              <!-- Show regions from JSON -->
-              <div v-for="(r, i) in regions" :key="i" class="box json-box"
-                   :style="getJsonBoxStyle(r)"></div>
+            <div
+              class="draw-stage"
+              ref="jsonPreviewStage"
+              :style="{ cursor: jsonStageCursor }"
+              @mousedown="onScribePanDown($event, 'json')"
+              @mousemove="onScribePanMove($event, 'json')"
+              @mouseup="onScribePanUp('json')"
+              @mouseleave="onScribePanUp('json')"
+              @wheel.prevent="onScribeStageWheel($event, 'json')"
+            >
+              <div class="zoom-controls zoom-controls-floating" aria-label="JSON preview zoom controls">
+                <button class="zoom-chip" @click.stop="zoomScribeView('json', -1)" :disabled="jsonZoom <= 1">−</button>
+                <button class="zoom-chip zoom-chip-reset" @click.stop="resetScribeView('json')" :disabled="jsonZoom === 1 && jsonPanX === 0 && jsonPanY === 0">Reset</button>
+                <button class="zoom-chip" @click.stop="zoomScribeView('json', 1)">+</button>
+                <span class="zoom-chip-readout">{{ Math.round(jsonZoom * 100) }}%</span>
+              </div>
+              <div class="scribe-zoom-layer" :style="jsonZoomLayerStyle">
+                <img :src="jsonImagePreview" alt="Manuscript page"
+                     class="draw-img" draggable="false" ref="jsonPreviewImg" />
+                <!-- Show regions from JSON -->
+                <div v-for="(r, i) in regions" :key="i" class="box json-box"
+                     :style="getJsonBoxStyle(r)"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -200,6 +248,20 @@
               <span class="summary-label">Confidence</span>
               <span class="summary-value">{{ results.statistics?.overall_confidence ? Math.round(results.statistics.overall_confidence) + '%' : (results.confidence ? Math.round(results.confidence) + '%' : 'N/A') }}</span>
             </div>
+            <div class="summary-stat">
+              <span class="summary-label">Algorithm</span>
+              <span class="summary-value summary-value--text">{{ algorithmLabel }}</span>
+            </div>
+          </div>
+
+          <div class="results-explainer">
+            <h5>How to read these results</h5>
+            <p>
+              PharoSight compares handwriting features line by line. “Detected Hands” groups
+              neighboring lines that look stylistically consistent, “Confidence” reports how strong
+              the detected transitions are, and “Features” lists the measurements used to explain
+              each hand assignment.
+            </p>
           </div>
 
           <!-- Export wrapper includes analyzed page + results for PDF -->
@@ -210,14 +272,31 @@
                   <span>Analyzed Page</span>
                 </div>
                 <div class="analyzed-card-body">
-                  <div class="page-stage">
-                    <img :src="analyzedImageSrc" :key="analyzedImageSrc"
-                       alt="Analyzed page"
-                       class="pdf-page-image"
-                       ref="manuscriptImage"
-                       crossorigin="anonymous"
-                       @load="onAnalyzedImageLoad"/>
-                    <canvas ref="pageOverlay" class="page-overlay"></canvas>
+                  <div
+                    class="page-stage"
+                    ref="resultsStage"
+                    :style="{ cursor: resultsStageCursor }"
+                    @mousedown="onScribePanDown($event, 'results')"
+                    @mousemove="onScribePanMove($event, 'results')"
+                    @mouseup="onScribePanUp('results')"
+                    @mouseleave="onScribePanUp('results')"
+                    @wheel.prevent="onScribeStageWheel($event, 'results')"
+                  >
+                    <div class="zoom-controls zoom-controls-floating" aria-label="Analyzed page zoom controls">
+                      <button class="zoom-chip" @click.stop="zoomScribeView('results', -1)" :disabled="resultsZoom <= 1">−</button>
+                      <button class="zoom-chip zoom-chip-reset" @click.stop="resetScribeView('results')" :disabled="resultsZoom === 1 && resultsPanX === 0 && resultsPanY === 0">Reset</button>
+                      <button class="zoom-chip" @click.stop="zoomScribeView('results', 1)">+</button>
+                      <span class="zoom-chip-readout">{{ Math.round(resultsZoom * 100) }}%</span>
+                    </div>
+                    <div class="scribe-results-zoom-layer" :style="resultsZoomLayerStyle">
+                      <img :src="analyzedImageSrc" :key="analyzedImageSrc"
+                         alt="Analyzed page"
+                         class="pdf-page-image"
+                         ref="manuscriptImage"
+                         crossorigin="anonymous"
+                         @load="onAnalyzedImageLoad"/>
+                      <canvas ref="pageOverlay" class="page-overlay"></canvas>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -267,7 +346,10 @@
                         <div v-for="(value, key) in change.features" :key="key"
                              v-show="!key.startsWith('_')"
                              class="feature-cell">
-                          <span class="feature-cell-label">{{ formatFeatureLabel(key) }}</span>
+                          <span class="feature-cell-label" :title="featureDescription(key)">
+                            {{ formatFeatureLabel(key) }}
+                            <small>{{ featureDescription(key) }}</small>
+                          </span>
                           <span class="feature-cell-value">{{ formatFeatureValue(key, value) }}</span>
                         </div>
                       </div>
@@ -295,7 +377,10 @@
                       <div v-for="(value, key) in results.scribe_changes[0].features" :key="key"
                            v-show="!key.startsWith('_')"
                            class="feature-cell">
-                        <span class="feature-cell-label">{{ formatFeatureLabel(key) }}</span>
+                        <span class="feature-cell-label" :title="featureDescription(key)">
+                          {{ formatFeatureLabel(key) }}
+                          <small>{{ featureDescription(key) }}</small>
+                        </span>
                         <span class="feature-cell-value">{{ formatFeatureValue(key, value) }}</span>
                       </div>
                     </div>
@@ -327,6 +412,11 @@
               <div class="comparison-header">
                 <h5 class="comparison-title">Feature Comparison</h5>
               </div>
+              <p class="comparison-explainer">
+                This panel compares the same handwriting measurements across detected hands. Larger
+                separation between rows is stronger evidence that the selected line groups were written
+                by different hands.
+              </p>
               <ScribeFeatureComparison
                 ref="featureComparison"
                 :scribes="results.scribe_changes"
@@ -534,7 +624,22 @@ export default {
         letter_height_avg: 'Letter Height',
         letter_height_variance: 'Height Variance',
         baseline_straightness: 'Baseline Straightness'
-      }
+      },
+      drawZoom: 1,
+      drawPanX: 0,
+      drawPanY: 0,
+      isDrawPanning: false,
+      jsonZoom: 1,
+      jsonPanX: 0,
+      jsonPanY: 0,
+      isJsonPanning: false,
+      resultsZoom: 1,
+      resultsPanX: 0,
+      resultsPanY: 0,
+      isResultsPanning: false,
+      scribeZoomStep: 0.15,
+      scribeMaxZoom: 4,
+      scribePanStart: null
     }
   },
   watch: {
@@ -683,6 +788,37 @@ export default {
       const waiting = this.isAnalyzing
       const manualNeedsSelection = (this.mode === 'manual' && this.regions.length === 0)
       return waiting || manualNeedsSelection
+    },
+    drawZoomLayerStyle() {
+      return this.scribeZoomLayerStyle('draw')
+    },
+    jsonZoomLayerStyle() {
+      return this.scribeZoomLayerStyle('json')
+    },
+    resultsZoomLayerStyle() {
+      return this.scribeZoomLayerStyle('results')
+    },
+    drawStageCursor() {
+      if (this.drawActive) return 'crosshair'
+      if (this.isDrawPanning) return 'grabbing'
+      return this.drawZoom > 1 ? 'grab' : 'default'
+    },
+    jsonStageCursor() {
+      if (this.isJsonPanning) return 'grabbing'
+      return this.jsonZoom > 1 ? 'grab' : 'default'
+    },
+    resultsStageCursor() {
+      if (this.isResultsPanning) return 'grabbing'
+      return this.resultsZoom > 1 ? 'grab' : 'default'
+    },
+    algorithmLabel() {
+      const value = this.results?.algorithm || this.results?.algo || this.params.algo || 'auto'
+      const map = {
+        auto: 'Auto',
+        peaks: 'Peaks',
+        ruptures: 'Ruptures'
+      }
+      return map[String(value).toLowerCase()] || String(value)
     }
   },
   mounted() {
@@ -692,6 +828,165 @@ export default {
     window.removeEventListener('resize', this.drawPageOverlay)
   },
   methods: {
+    getScribeViewState(kind) {
+      const map = {
+        draw: {
+          zoom: 'drawZoom',
+          panX: 'drawPanX',
+          panY: 'drawPanY',
+          panning: 'isDrawPanning',
+          stage: 'drawStage'
+        },
+        json: {
+          zoom: 'jsonZoom',
+          panX: 'jsonPanX',
+          panY: 'jsonPanY',
+          panning: 'isJsonPanning',
+          stage: 'jsonPreviewStage'
+        },
+        results: {
+          zoom: 'resultsZoom',
+          panX: 'resultsPanX',
+          panY: 'resultsPanY',
+          panning: 'isResultsPanning',
+          stage: 'resultsStage'
+        }
+      }
+      return map[kind] || map.draw
+    },
+    scribeZoomLayerStyle(kind) {
+      const state = this.getScribeViewState(kind)
+      return {
+        transform: `translate(${this[state.panX]}px, ${this[state.panY]}px) scale(${this[state.zoom]})`,
+        transformOrigin: 'center center'
+      }
+    },
+    zoomScribeView(kind, direction) {
+      const state = this.getScribeViewState(kind)
+      const stage = this.$refs[state.stage]
+      const rect = stage?.getBoundingClientRect()
+      const factor = direction > 0 ? 1 + this.scribeZoomStep : 1 / (1 + this.scribeZoomStep)
+      this.zoomScribeViewAt(kind, factor, rect ? rect.left + rect.width / 2 : null, rect ? rect.top + rect.height / 2 : null)
+    },
+    resetScribeView(kind) {
+      const state = this.getScribeViewState(kind)
+      this[state.zoom] = 1
+      this[state.panX] = 0
+      this[state.panY] = 0
+      this[state.panning] = false
+      if (this.scribePanStart?.kind === kind) this.scribePanStart = null
+      this.$nextTick(() => this.drawPageOverlay())
+    },
+    resetAllScribeViews() {
+      ['draw', 'json', 'results'].forEach(kind => this.resetScribeView(kind))
+    },
+    onScribeStageWheel(event, kind) {
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12
+      this.zoomScribeViewAt(kind, factor, event.clientX, event.clientY)
+    },
+    zoomScribeViewAt(kind, factor, clientX = null, clientY = null) {
+      const state = this.getScribeViewState(kind)
+      const oldZoom = this[state.zoom] || 1
+      const nextZoom = Math.max(1, Math.min(this.scribeMaxZoom, +(oldZoom * factor).toFixed(3)))
+      if (nextZoom === oldZoom) {
+        this.clampScribePan(kind)
+        return
+      }
+
+      const stage = this.$refs[state.stage]
+      const rect = stage?.getBoundingClientRect()
+      if (!rect || clientX == null || clientY == null) {
+        this[state.zoom] = nextZoom
+        this.clampScribePan(kind)
+        return
+      }
+
+      const centerX = rect.left + rect.width / 2
+      const centerY = rect.top + rect.height / 2
+      const localX = (clientX - centerX - this[state.panX]) / oldZoom
+      const localY = (clientY - centerY - this[state.panY]) / oldZoom
+
+      this[state.zoom] = nextZoom
+      this[state.panX] = clientX - centerX - localX * nextZoom
+      this[state.panY] = clientY - centerY - localY * nextZoom
+      this.clampScribePan(kind)
+      this.$nextTick(() => this.drawPageOverlay())
+    },
+    clampScribePan(kind) {
+      const state = this.getScribeViewState(kind)
+      const stage = this.$refs[state.stage]
+      const rect = stage?.getBoundingClientRect()
+      if (!rect) return
+      const zoom = this[state.zoom] || 1
+      const margin = 120
+      const maxX = Math.max(0, (rect.width * (zoom - 1)) / 2) + margin
+      const maxY = Math.max(0, (rect.height * (zoom - 1)) / 2) + margin
+      this[state.panX] = Math.max(-maxX, Math.min(maxX, this[state.panX]))
+      this[state.panY] = Math.max(-maxY, Math.min(maxY, this[state.panY]))
+    },
+    onScribePanDown(event, kind) {
+      const state = this.getScribeViewState(kind)
+      if (kind === 'draw' && this.drawActive) return
+      if ((this[state.zoom] || 1) <= 1) return
+      if (event.target?.closest?.('.zoom-controls')) return
+      event.preventDefault()
+      this[state.panning] = true
+      this.scribePanStart = {
+        kind,
+        x: event.clientX,
+        y: event.clientY,
+        panX: this[state.panX],
+        panY: this[state.panY]
+      }
+    },
+    onScribePanMove(event, kind) {
+      const state = this.getScribeViewState(kind)
+      if (!this[state.panning] || this.scribePanStart?.kind !== kind) return
+      event.preventDefault()
+      this[state.panX] = this.scribePanStart.panX + event.clientX - this.scribePanStart.x
+      this[state.panY] = this.scribePanStart.panY + event.clientY - this.scribePanStart.y
+      this.clampScribePan(kind)
+      if (kind === 'results') this.drawPageOverlay()
+    },
+    onScribePanUp(kind) {
+      const state = this.getScribeViewState(kind)
+      this[state.panning] = false
+      if (this.scribePanStart?.kind === kind) this.scribePanStart = null
+    },
+    pointerToScribeStage(event, kind = 'draw') {
+      const state = this.getScribeViewState(kind)
+      const stage = this.$refs[state.stage]
+      const rect = stage?.getBoundingClientRect()
+      if (!rect) return { x: 0, y: 0 }
+      const zoom = this[state.zoom] || 1
+      const stageX = event.clientX - rect.left
+      const stageY = event.clientY - rect.top
+      const centerX = rect.width / 2
+      const centerY = rect.height / 2
+      return {
+        x: (stageX - centerX - this[state.panX]) / zoom + centerX,
+        y: (stageY - centerY - this[state.panY]) / zoom + centerY
+      }
+    },
+    getBaseContentBox(stageEl, naturalWidth, naturalHeight) {
+      const rect = stageEl?.getBoundingClientRect()
+      if (!rect || !naturalWidth || !naturalHeight || !rect.width || !rect.height) {
+        return { left: 0, top: 0, width: rect?.width || 0, height: rect?.height || 0, offX: 0, offY: 0 }
+      }
+      const natAR = naturalWidth / naturalHeight
+      const rectAR = rect.width / rect.height
+      let contentW, contentH, offX = 0, offY = 0
+      if (rectAR > natAR) {
+        contentH = rect.height
+        contentW = contentH * natAR
+        offX = (rect.width - contentW) / 2
+      } else {
+        contentW = rect.width
+        contentH = contentW / natAR
+        offY = (rect.height - contentH) / 2
+      }
+      return { left: offX, top: offY, width: contentW, height: contentH, offX, offY, rect }
+    },
     // ---------- Lifecycle helpers ----------
     openPopup() {
       this.isVisible = true
@@ -714,6 +1009,7 @@ export default {
       this.segmentPreviews = Object.create(null)
       this.errorMessage = null
       this.errorDetail = null
+      this.resetAllScribeViews()
     },
     showError(title, message) {
       this.errorMessage = title
@@ -869,33 +1165,13 @@ export default {
           height: `${r.h}px`
         }
       }
-      
-      // Calculate the actual displayed size (considering object-fit: contain)
-      const imgAspect = this.jsonSourceWidth / this.jsonSourceHeight
-      const containerAspect = img.clientWidth / img.clientHeight
-      
-      let displayWidth, displayHeight, offsetX, offsetY
-      
-      if (imgAspect > containerAspect) {
-        // Image is wider - fits to width
-        displayWidth = img.clientWidth
-        displayHeight = img.clientWidth / imgAspect
-        offsetX = 0
-        offsetY = (img.clientHeight - displayHeight) / 2
-      } else {
-        // Image is taller - fits to height
-        displayHeight = img.clientHeight
-        displayWidth = img.clientHeight * imgAspect
-        offsetX = (img.clientWidth - displayWidth) / 2
-        offsetY = 0
-      }
-      
-      const scaleX = displayWidth / this.jsonSourceWidth
-      const scaleY = displayHeight / this.jsonSourceHeight
+      const box = this.getBaseContentBox(this.$refs.jsonPreviewStage, this.jsonSourceWidth, this.jsonSourceHeight)
+      const scaleX = box.width / this.jsonSourceWidth
+      const scaleY = box.height / this.jsonSourceHeight
       
       return {
-        left: `${offsetX + (r.x * scaleX)}px`,
-        top: `${offsetY + (r.y * scaleY)}px`,
+        left: `${box.offX + (r.x * scaleX)}px`,
+        top: `${box.offY + (r.y * scaleY)}px`,
         width: `${r.w * scaleX}px`,
         height: `${r.h * scaleY}px`
       }
@@ -961,42 +1237,20 @@ export default {
       return { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` }
     },
     getDisplayedContentBox(imgEl) {
-      const rect = imgEl.getBoundingClientRect()
-      const natW = imgEl.naturalWidth
-      const natH = imgEl.naturalHeight
-      if (!natW || !natH || !rect.width || !rect.height) {
-        return { left: rect.left, top: rect.top, width: rect.width, height: rect.height, offX: 0, offY: 0 }
-      }
-      const natAR = natW / natH
-      const rectAR = rect.width / rect.height
-      let contentW, contentH, offX = 0, offY = 0
-      if (rectAR > natAR) {
-        contentH = rect.height
-        contentW = contentH * natAR
-        offX = (rect.width - contentW) / 2
-      } else {
-        contentW = rect.width
-        contentH = contentW / natAR
-        offY = (rect.height - contentH) / 2
-      }
-      return {
-        left: rect.left + offX,
-        top: rect.top + offY,
-        width: contentW,
-        height: contentH,
-        offX,
-        offY,
-        rect
-      }
+      const stageEl = imgEl?.closest?.('.draw-stage') || imgEl?.closest?.('.page-stage') || this.$refs.drawStage
+      return this.getBaseContentBox(stageEl, imgEl?.naturalWidth || 0, imgEl?.naturalHeight || 0)
     },
     _clamp(v, min, max) { return Math.max(min, Math.min(v, max)) },
     onImgDown(e) {
       if (this.mode !== 'manual' || !this.drawActive || !this.canDraw) return
+      e.preventDefault()
+      e.stopPropagation()
       const img = e.currentTarget
       const box = this.getDisplayedContentBox(img)
       const natW = img.naturalWidth, natH = img.naturalHeight
-      const sxC = this._clamp(e.clientX - box.left, 0, box.width)
-      const syC = this._clamp(e.clientY - box.top, 0, box.height)
+      const local = this.pointerToScribeStage(e, 'draw')
+      const sxC = this._clamp(local.x - box.left, 0, box.width)
+      const syC = this._clamp(local.y - box.top, 0, box.height)
       const scaleX = natW / box.width
       const scaleY = natH / box.height
       this.liveBox = {
@@ -1011,13 +1265,16 @@ export default {
     },
     onImgMove(e) {
       if (!this.liveBox) return
+      e.preventDefault()
+      e.stopPropagation()
       const img = e.currentTarget
       const box = this.getDisplayedContentBox(img)
       const natW = img.naturalWidth, natH = img.naturalHeight
       const scaleX = natW / box.width
       const scaleY = natH / box.height
-      const cx = this._clamp(e.clientX - box.left, 0, box.width)
-      const cy = this._clamp(e.clientY - box.top, 0, box.height)
+      const local = this.pointerToScribeStage(e, 'draw')
+      const cx = this._clamp(local.x - box.left, 0, box.width)
+      const cy = this._clamp(local.y - box.top, 0, box.height)
       const sx = this.liveBox._sxC
       const sy = this.liveBox._syC
       const leftC = Math.min(cx, sx)
@@ -1521,6 +1778,25 @@ export default {
       return this.featureLabels[key] || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
     },
 
+    featureDescription(key) {
+      const descriptions = {
+        avg_stroke_width: 'Average thickness of the written strokes.',
+        stroke_width_variance: 'How much stroke thickness changes within the sample.',
+        curvature_avg: 'How rounded or curved the letter forms are.',
+        angularity_score: 'How sharp or angular the strokes and turns are.',
+        letter_spacing: 'Average spacing between letters or connected components.',
+        word_spacing: 'Average spacing between word groups.',
+        slant_angle: 'Main writing slant direction measured in degrees.',
+        slant_consistency: 'How consistently the writing keeps the same slant.',
+        pressure_avg: 'Estimated darkness/weight of ink strokes.',
+        pressure_variance: 'How much stroke darkness varies.',
+        letter_height_avg: 'Average height of text components.',
+        letter_height_variance: 'How much letter height changes.',
+        baseline_straightness: 'How steadily the writing follows a baseline.'
+      }
+      return descriptions[key] || 'A measured handwriting feature used during hand-change scoring.'
+    },
+
     formatFeatureValue(key, value) {
       if (value == null) return 'N/A'
       // Handle aggregated features with mean/std structure
@@ -1918,7 +2194,19 @@ export default {
 
     // ---------- Export ----------
     async exportPDF() {
+      const viewSnapshot = {
+        resultsZoom: this.resultsZoom,
+        resultsPanX: this.resultsPanX,
+        resultsPanY: this.resultsPanY
+      }
       try {
+        this.resultsZoom = 1
+        this.resultsPanX = 0
+        this.resultsPanY = 0
+        await this.$nextTick()
+        this.drawPageOverlay()
+        await this.$nextTick()
+
         const el = this.$refs.exportWrapper || this.$el.querySelector('.results-section')
         if (!el) return
         const { jsPDF } = await import('jspdf')
@@ -1957,6 +2245,11 @@ export default {
       } catch (e) {
         console.error(e)
         alert('Failed to export PDF')
+      } finally {
+        this.resultsZoom = viewSnapshot.resultsZoom
+        this.resultsPanX = viewSnapshot.resultsPanX
+        this.resultsPanY = viewSnapshot.resultsPanY
+        this.$nextTick(() => this.drawPageOverlay())
       }
     },
 
@@ -1972,6 +2265,8 @@ export default {
       this.results = null
       this.analysisCompleted = false
       this.segmentPreviews = Object.create(null)
+      this.resetScribeView('draw')
+      this.resetScribeView('json')
       this.$nextTick(() => this.drawPageOverlay())
     },
   }
@@ -2246,6 +2541,51 @@ export default {
   display:flex; align-items:center; gap:10px; margin-bottom:8px;
 }
 .spacer{ flex:1; }
+.zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--card));
+}
+.zoom-controls-floating {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.16);
+}
+.zoom-chip {
+  min-width: 28px;
+  height: 26px;
+  border: 1px solid hsl(var(--primary) / 0.35);
+  border-radius: 999px;
+  background: hsl(var(--primary) / 0.1);
+  color: hsl(var(--primary));
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.zoom-chip:hover:not(:disabled) {
+  background: hsl(var(--primary) / 0.16);
+}
+.zoom-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.zoom-chip-reset {
+  padding: 0 9px;
+}
+.zoom-chip-readout {
+  min-width: 42px;
+  padding: 0 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
 .pill{
   background:hsl(var(--primary) / 0.1); color:hsl(var(--primary)); border:1px solid hsl(var(--primary) / 0.3);
   border-radius:999px; padding:6px 10px; font-weight:600; cursor:pointer;
@@ -2260,6 +2600,12 @@ export default {
   border:1px solid hsl(var(--border)); border-radius:var(--radius-lg, 12px);
   height: 420px;             /* fixed viewport; image will contain-fit */
   overflow:hidden;
+  touch-action: none;
+}
+.scribe-zoom-layer {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
 }
 .draw-img{ width:100%; height:100%; object-fit: contain; user-select:none; }
 
@@ -2392,6 +2738,7 @@ export default {
 /* Summary Bar */
 .results-summary-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 24px;
   padding: 12px 16px;
   background: hsl(var(--primary) / 0.08);
@@ -2418,6 +2765,46 @@ export default {
   font-size: 18px;
   font-weight: 700;
   color: hsl(var(--primary));
+}
+
+.summary-value--text {
+  font-size: 14px;
+}
+
+.algorithm-disclosure,
+.results-explainer {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--muted) / 0.45);
+  color: hsl(var(--foreground));
+}
+
+.algorithm-disclosure p,
+.results-explainer p,
+.comparison-explainer {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.algorithm-kicker {
+  margin-bottom: 2px;
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.results-explainer h5 {
+  margin: 0;
+  font-size: 13px;
+  color: hsl(var(--foreground));
 }
 
 .scribe-results { margin-top: 16px; }
@@ -2544,6 +2931,10 @@ export default {
   margin-bottom: 16px;
   padding-bottom: 12px;
   border-bottom: 1px solid hsl(var(--border));
+}
+
+.comparison-explainer {
+  margin: -4px 0 14px;
 }
 
 .comparison-title {
@@ -3044,6 +3435,14 @@ export default {
 .page-stage {
   position: relative;
   width: 100%;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.scribe-results-zoom-layer {
+  position: relative;
+  width: 100%;
+  will-change: transform;
 }
 
 .page-overlay {
@@ -3231,6 +3630,7 @@ export default {
 .feature-cell {
   display: flex;
   justify-content: space-between;
+  gap: 8px;
   padding: 6px 8px;
   background: hsl(var(--muted));
   border-radius: 4px;
@@ -3238,7 +3638,16 @@ export default {
 }
 
 .feature-cell-label {
+  display: grid;
+  gap: 2px;
   color: hsl(var(--muted-foreground));
+}
+
+.feature-cell-label small {
+  max-width: 160px;
+  color: hsl(var(--muted-foreground) / 0.86);
+  font-size: 10px;
+  line-height: 1.25;
 }
 
 .feature-cell-value {

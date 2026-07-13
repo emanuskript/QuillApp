@@ -89,9 +89,9 @@ function handleZoomSlider(val) {
           v-model="zoomSlider"
           :min="minZoom"
           :max="maxZoom"
-          :step="0.1"
+          :step="0.02"
           :disabled="!imageReady"
-          class="w-24"
+          class="w-36"
           @update:model-value="handleZoomSlider"
         />
 

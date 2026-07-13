@@ -16,6 +16,8 @@ const props = defineProps({
 const emit = defineEmits([
   'select-annotation',
   'delete-annotation',
+  'rename-annotation',
+  'generate-page-summary',
   'generate-bands-page',
   'generate-bands-doc',
   'generate-angles'
@@ -35,6 +37,128 @@ const annotationIcons = {
 }
 
 const annotationCount = computed(() => props.annotations.length)
+const selectedTypeLabel = computed(() => typeLabel(props.selectedAnnotation?.type))
+const selectedData = computed(() => props.selectedAnnotation?.data || {})
+const selectedDisplayName = computed(() => {
+  const annotation = props.selectedAnnotation
+  if (!annotation) return ''
+  return annotation.data?.name || annotation.label || typeLabel(annotation.type)
+})
+const selectedPropertyRows = computed(() => buildPropertyRows(props.selectedAnnotation))
+
+function isSelected(annotation) {
+  const selected = props.selectedAnnotation
+  if (!selected || !annotation) return false
+  if (selected.type !== annotation.type) return false
+  if (selected.data?.id && annotation.data?.id) {
+    return selected.data.id === annotation.data.id
+  }
+  return selected.data === annotation.data
+}
+
+function canRename(annotation) {
+  return ['trace', 'highlight', 'underline'].includes(annotation?.type)
+}
+
+function handleAnnotationNameChange(annotation, event) {
+  emit('rename-annotation', annotation, event.target.value)
+}
+
+function typeLabel(type) {
+  const labels = {
+    highlight: 'Highlight',
+    underline: 'Underline',
+    trace: 'Trace',
+    comment: 'Comment',
+    angle: 'Angle',
+    'length-h': 'Horizontal band',
+    'length-v': 'Vertical band'
+  }
+  return labels[type] || 'Annotation'
+}
+
+function formatNumber(value, suffix = '') {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '—'
+  return `${Number(number.toFixed(2))}${suffix}`
+}
+
+function formatDate(value) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleString()
+}
+
+function pointCount(annotation) {
+  return Array.isArray(annotation?.points) ? annotation.points.length : 0
+}
+
+function pathLength(points = []) {
+  if (!Array.isArray(points) || points.length < 2) return 0
+  return points.reduce((total, point, index) => {
+    if (index === 0) return total
+    const prev = points[index - 1]
+    const x1 = Number(prev.x)
+    const y1 = Number(prev.y)
+    const x2 = Number(point.x)
+    const y2 = Number(point.y)
+    if (![x1, y1, x2, y2].every(Number.isFinite)) return total
+    return total + Math.hypot(x2 - x1, y2 - y1)
+  }, 0)
+}
+
+function buildPropertyRows(annotationItem) {
+  if (!annotationItem?.data) return []
+  const type = annotationItem.type
+  const data = annotationItem.data
+  const rows = [
+    ['Page', String((data.pageIndex ?? props.currentPage) + 1)],
+  ]
+
+  if (['highlight', 'underline', 'length-h', 'length-v'].includes(type)) {
+    rows.push(['X', formatNumber(data.x, ' px')])
+    rows.push(['Y', formatNumber(data.y, ' px')])
+    rows.push(['Width', formatNumber(data.width, ' px')])
+    rows.push(['Height', formatNumber(data.height, ' px')])
+  }
+
+  if (type === 'highlight') {
+    rows.push(['Area', formatNumber((Number(data.width) || 0) * (Number(data.height) || 0), ' px²')])
+  }
+
+  if (type === 'underline') {
+    rows.push(['Underline length', formatNumber(data.width, ' px')])
+  }
+
+  if (type === 'trace') {
+    rows.push(['Points', String(pointCount(data))])
+    rows.push(['Path length', formatNumber(pathLength(data.points), ' px')])
+    rows.push(['Nib angle', formatNumber(data.nibAngle, '°')])
+    rows.push(['Nib width', formatNumber(data.penWidth, ' px')])
+    rows.push(['Nib height', formatNumber(data.penHeight, ' px')])
+  }
+
+  if (type === 'angle') {
+    rows.push(['Angle', formatNumber(data.angle, '°')])
+    if (data.label) rows.push(['Label', data.label])
+    rows.push(['Points', String(pointCount(data))])
+  }
+
+  if (type === 'comment') {
+    rows.push(['Anchor X', formatNumber(data.x, ' px')])
+    rows.push(['Anchor Y', formatNumber(data.y, ' px')])
+  }
+
+  if (type === 'length-h' || type === 'length-v') {
+    rows.push(['Band type', annotationItem.label])
+    rows.push(['Measured value', formatNumber(type === 'length-h' ? data.height : data.width, ' px')])
+  }
+
+  const created = formatDate(data.createdAt)
+  if (created) rows.push(['Created', created])
+  return rows
+}
 </script>
 
 <template>
@@ -72,13 +196,23 @@ const annotationCount = computed(() => props.annotations.length)
             v-for="(annotation, index) in annotations"
             :key="`${annotation.type}-${index}`"
             class="p-2 rounded-md border bg-card hover:bg-muted cursor-pointer group transition-colors"
-            :class="{ 'ring-2 ring-primary': selectedAnnotation === annotation }"
+            :class="{ 'ring-2 ring-primary bg-muted': isSelected(annotation) }"
             @click="emit('select-annotation', annotation)"
           >
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2 min-w-0">
                 <Icon :name="annotationIcons[annotation.type] || 'file'" :size="16" class="shrink-0" />
-                <span class="text-sm truncate">{{ annotation.label }}</span>
+                <input
+                  v-if="canRename(annotation)"
+                  class="trace-name-input"
+                  :value="annotation.data?.name || annotation.label"
+                  :aria-label="`${annotation.type} name`"
+                  @click.stop
+                  @focus="emit('select-annotation', annotation)"
+                  @change="handleAnnotationNameChange(annotation, $event)"
+                  @keydown.enter="$event.target.blur()"
+                />
+                <span v-else class="text-sm truncate">{{ annotation.label }}</span>
               </div>
               <Button
                 variant="ghost"
@@ -100,13 +234,39 @@ const annotationCount = computed(() => props.annotations.length)
           <p>No selection</p>
           <p class="text-xs mt-1">Select an annotation to view properties</p>
         </div>
-        <div v-else class="space-y-3">
-          <div class="text-sm font-medium capitalize">{{ selectedAnnotation.type }}</div>
-          <div class="text-xs text-muted-foreground">
-            Page {{ currentPage + 1 }}
+        <div v-else class="properties-panel">
+          <div class="properties-header">
+            <Icon :name="annotationIcons[selectedAnnotation.type] || 'file'" :size="18" />
+            <div class="min-w-0">
+              <div class="properties-title">{{ selectedTypeLabel }}</div>
+              <div class="properties-subtitle">{{ selectedDisplayName }}</div>
+            </div>
           </div>
-          <div v-if="selectedAnnotation.label" class="text-sm">
-            {{ selectedAnnotation.label }}
+
+          <div v-if="canRename(selectedAnnotation)" class="property-section">
+            <label class="property-label" for="selected-annotation-name">Display name</label>
+            <input
+              id="selected-annotation-name"
+              class="trace-name-input property-name-input"
+              :value="selectedData?.name || selectedAnnotation.label"
+              @change="handleAnnotationNameChange(selectedAnnotation, $event)"
+              @keydown.enter="$event.target.blur()"
+            />
+          </div>
+
+          <div v-if="selectedAnnotation.type === 'comment'" class="property-section">
+            <div class="property-label">Comment text</div>
+            <div class="comment-property-text">{{ selectedData.text || '—' }}</div>
+          </div>
+
+          <div class="property-section">
+            <div class="property-label">Details</div>
+            <div class="property-grid">
+              <div v-for="[label, value] in selectedPropertyRows" :key="label" class="property-row">
+                <span>{{ label }}</span>
+                <strong>{{ value }}</strong>
+              </div>
+            </div>
           </div>
         </div>
       </TabsContent>
@@ -145,6 +305,15 @@ const annotationCount = computed(() => props.annotations.length)
             variant="outline"
             size="sm"
             class="w-full justify-start"
+            @click="emit('generate-page-summary')"
+          >
+            <Icon name="bar-chart-3" :size="14" class="mr-2" />
+            Current Page Summary
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            class="w-full justify-start"
             @click="emit('generate-bands-page')"
           >
             <Icon name="ruler" :size="14" class="mr-2" />
@@ -173,3 +342,118 @@ const annotationCount = computed(() => props.annotations.length)
     </div>
   </div>
 </template>
+
+<style scoped>
+.trace-name-input {
+  min-width: 0;
+  width: 100%;
+  height: 1.75rem;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  padding: 0 0.375rem;
+  outline: none;
+}
+
+.trace-name-input:hover {
+  border-color: hsl(var(--border));
+  background: hsl(var(--background));
+}
+
+.trace-name-input:focus {
+  border-color: hsl(var(--primary));
+  background: hsl(var(--background));
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.14);
+}
+
+.properties-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.properties-header {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.625rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  background: hsl(var(--muted) / 0.45);
+}
+
+.properties-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: hsl(var(--foreground));
+}
+
+.properties-subtitle {
+  overflow: hidden;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.property-section {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.property-label {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.property-name-input {
+  border-color: hsl(var(--border));
+  background: hsl(var(--background));
+}
+
+.comment-property-text {
+  max-height: 8rem;
+  overflow: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  padding: 0.625rem;
+  white-space: pre-wrap;
+}
+
+.property-grid {
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+}
+
+.property-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.625rem;
+  border-bottom: 1px solid hsl(var(--border));
+  font-size: 0.8125rem;
+}
+
+.property-row:last-child {
+  border-bottom: 0;
+}
+
+.property-row span {
+  color: hsl(var(--muted-foreground));
+}
+
+.property-row strong {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+  text-align: right;
+}
+</style>

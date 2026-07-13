@@ -92,9 +92,11 @@ function handleThemeSelect(theme) {
           <TooltipContent side="bottom">Toggle toolbar</TooltipContent>
         </Tooltip>
 
-        <div class="flex items-center gap-2 cursor-pointer" @click="emit('go-home')">
-          <img :src="seshatLogo" alt="Seshat logo" class="topbar-logo h-6 w-6" />
-          <span class="text-sm font-medium text-foreground truncate max-w-[200px]">
+        <div class="brand-lockup" @click="emit('go-home')">
+          <span class="topbar-logo-frame" aria-hidden="true">
+            <img :src="seshatLogo" alt="" class="topbar-logo" />
+          </span>
+          <span class="text-base font-semibold text-foreground truncate max-w-[240px]">
             {{ documentName }}
           </span>
         </div>
@@ -161,8 +163,9 @@ function handleThemeSelect(theme) {
           <DropdownMenuContent align="end" class="w-56">
             <DropdownMenuLabel>Export</DropdownMenuLabel>
             <DropdownMenuItem @click="emit('save'); saveDropdownOpen = false">
-              <Icon name="file-text" :size="16" class="mr-2" />
-              Save as PDF
+              <Icon name="file-down" :size="16" class="mr-2" />
+              Download full annotated PDF
+              <span class="ml-auto text-xs text-muted-foreground">All pages</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem @click="emit('export-json'); saveDropdownOpen = false">
@@ -266,13 +269,54 @@ function handleThemeSelect(theme) {
 </template>
 
 <style scoped>
+.brand-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  height: 2.5rem;
+  cursor: pointer;
+  border-radius: 0.5rem;
+  padding: 0 0.375rem 0 0.25rem;
+  transition: background-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.brand-lockup:hover {
+  background: hsl(var(--accent) / 0.55);
+}
+
+.topbar-logo-frame {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: 0 0 2.25rem;
+  border: 1px solid hsl(var(--border) / 0.55);
+  border-radius: 0.5rem;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(249, 115, 22, 0.16), transparent 68%),
+    hsl(var(--background) / 0.42);
+}
+
 .topbar-logo {
-  transition: filter 0.2s ease;
+  display: block;
+  width: auto;
+  height: 1.9rem;
+  max-width: 1.7rem;
+  object-fit: contain;
+  transition: filter 0.2s ease, transform 0.16s ease;
 }
+
+.brand-lockup:hover .topbar-logo {
+  transform: scale(1.04);
+}
+
 .dark .topbar-logo {
-  filter: brightness(1.15);
+  filter: brightness(1.16) saturate(1.08) drop-shadow(0 0 5px rgba(249, 115, 22, 0.2));
 }
+
 .high-contrast .topbar-logo {
-  filter: contrast(1.2);
+  filter: contrast(1.25) brightness(1.12);
 }
 </style>

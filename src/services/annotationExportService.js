@@ -27,10 +27,14 @@ export function generateFilename(documentName, extension) {
 export function downloadFile(content, filename, mimeType) {
   const blob = new Blob([content], { type: mimeType })
   const link = document.createElement('a')
-  link.href = URL.createObjectURL(blob)
+  const url = URL.createObjectURL(blob)
+  link.href = url
   link.download = filename
+  link.style.display = 'none'
+  document.body.appendChild(link)
   link.click()
-  URL.revokeObjectURL(link.href)
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 /**
@@ -150,8 +154,9 @@ function colorToName(color) {
  * Format number safely
  */
 function formatNum(val, decimals = 2) {
-  if (typeof val !== 'number' || isNaN(val)) return '0'
-  return val.toFixed(decimals)
+  const num = Number(val)
+  if (!Number.isFinite(num)) return '0'
+  return num.toFixed(decimals)
 }
 
 /**
@@ -189,7 +194,7 @@ export function buildTeiExport(annotations, metadata) {
 
   annotationTypes.forEach(type => {
     (normalized[type] || []).forEach(ann => {
-      const page = ann.pageIndex || 0
+      const page = ann.pageIndex ?? 0
       if (!pageGroups[page]) pageGroups[page] = {}
       if (!pageGroups[page][type]) pageGroups[page][type] = []
       pageGroups[page][type].push(ann)
@@ -341,7 +346,7 @@ Total Pages: ${metadata.totalPages || 'Unknown'}
 
   annotationTypes.forEach(type => {
     (normalized[type] || []).forEach(ann => {
-      const page = ann.pageIndex || 0
+      const page = ann.pageIndex ?? 0
       if (!pageGroups[page]) pageGroups[page] = {}
       if (!pageGroups[page][type]) pageGroups[page][type] = []
       pageGroups[page][type].push(ann)
@@ -534,7 +539,7 @@ export function buildWebAnnotationExport(annotations, metadata) {
 
   // Comments -> commenting motivation
   normalized.comments.forEach(comment => {
-    const canvasUrl = getCanvasUrl(metadata.iiifManifest, comment.pageIndex || 0)
+    const canvasUrl = getCanvasUrl(metadata.iiifManifest, comment.pageIndex ?? 0)
     items.push(createAnnotation(
       'commenting',
       {
@@ -548,7 +553,7 @@ export function buildWebAnnotationExport(annotations, metadata) {
         selector: {
           type: 'PointSelector',
           x: comment.x || 0,
-          y: comment.t || 0 // t is the y position for comments
+          y: comment.y || 0
         }
       }
     ));
@@ -556,7 +561,7 @@ export function buildWebAnnotationExport(annotations, metadata) {
 
   // Highlights -> highlighting motivation
   normalized.highlights.forEach(h => {
-    const canvasUrl = getCanvasUrl(metadata.iiifManifest, h.pageIndex || 0)
+    const canvasUrl = getCanvasUrl(metadata.iiifManifest, h.pageIndex ?? 0)
     const ann = createAnnotation(
       'highlighting',
       null,
@@ -581,7 +586,7 @@ export function buildWebAnnotationExport(annotations, metadata) {
 
   // Underlines -> highlighting motivation with underline style
   normalized.underlines.forEach(u => {
-    const canvasUrl = getCanvasUrl(metadata.iiifManifest, u.pageIndex || 0)
+    const canvasUrl = getCanvasUrl(metadata.iiifManifest, u.pageIndex ?? 0)
     const ann = createAnnotation(
       'highlighting',
       null,
@@ -604,7 +609,7 @@ export function buildWebAnnotationExport(annotations, metadata) {
 
   // Traces -> describing motivation with SVG path
   normalized.traces.forEach(trace => {
-    const canvasUrl = getCanvasUrl(metadata.iiifManifest, trace.pageIndex || 0)
+    const canvasUrl = getCanvasUrl(metadata.iiifManifest, trace.pageIndex ?? 0)
     const pathData = trace.points?.map((p, i) =>
       `${i === 0 ? 'M' : 'L'}${formatNum(p.x)},${formatNum(p.y)}`
     ).join(' ') || ''
@@ -629,7 +634,7 @@ export function buildWebAnnotationExport(annotations, metadata) {
 
   // Angles -> describing motivation
   normalized.angles.forEach(angle => {
-    const canvasUrl = getCanvasUrl(metadata.iiifManifest, angle.pageIndex || 0)
+    const canvasUrl = getCanvasUrl(metadata.iiifManifest, angle.pageIndex ?? 0)
     const points = angle.points || []
     const pathData = points.map((p, i) =>
       `${i === 0 ? 'M' : 'L'}${formatNum(p.x)},${formatNum(p.y)}`
@@ -656,7 +661,7 @@ export function buildWebAnnotationExport(annotations, metadata) {
   // Bands -> classifying motivation
   const processBands = (bands, orientation) => {
     (bands || []).forEach(band => {
-      const canvasUrl = getCanvasUrl(metadata.iiifManifest, band.pageIndex || 0)
+      const canvasUrl = getCanvasUrl(metadata.iiifManifest, band.pageIndex ?? 0)
       items.push(createAnnotation(
         'classifying',
         {
