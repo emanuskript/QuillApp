@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import Icon from '@/components/ui/icon/Icon.vue'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
@@ -25,6 +25,7 @@ const emit = defineEmits([
 
 const activeTab = ref('annotations')
 const statsExpanded = ref(true)
+const annotationsScrollEl = ref(null)
 
 const annotationIcons = {
   highlight: 'highlighter',
@@ -46,6 +47,48 @@ const selectedDisplayName = computed(() => {
   return annotation.data?.name || annotation.label || typeLabel(annotation.type)
 })
 const selectedPropertyRows = computed(() => buildPropertyRows(props.selectedAnnotation))
+
+function latestAnnotationKey(annotations = []) {
+  const latest = annotations[annotations.length - 1]
+  if (!latest) return ''
+  const data = latest.data || {}
+  return [
+    latest.type,
+    data.id || latest.id || latest.index,
+    data.name || latest.label || '',
+    data.createdOrder || data.createdAt || '',
+  ].join(':')
+}
+
+function scrollAnnotationsToLatest(behavior = 'smooth') {
+  const el = annotationsScrollEl.value
+  if (!el) return
+  el.scrollTo({ top: el.scrollHeight, behavior })
+}
+
+watch(
+  () => ({
+    page: props.currentPage,
+    count: props.annotations.length,
+    latestKey: latestAnnotationKey(props.annotations),
+  }),
+  (next, previous) => {
+    if (!previous || activeTab.value !== 'annotations') return
+    const samePage = next.page === previous.page
+    const addedRow = next.count > previous.count
+    const latestRowChanged = next.count > 0 && next.count === previous.count && next.latestKey !== previous.latestKey
+    if (samePage && (addedRow || latestRowChanged)) {
+      nextTick(() => scrollAnnotationsToLatest())
+    }
+  },
+  { flush: 'post' }
+)
+
+watch(activeTab, (tab) => {
+  if (tab === 'annotations') {
+    nextTick(() => scrollAnnotationsToLatest('auto'))
+  }
+})
 
 function isSelected(annotation) {
   const selected = props.selectedAnnotation
@@ -196,43 +239,45 @@ function buildPropertyRows(annotationItem) {
       </TabsList>
 
       <!-- Annotations Tab -->
-      <TabsContent value="annotations" class="flex-1 overflow-y-auto p-3 mt-0">
-        <div v-if="annotations.length === 0" class="text-center text-muted-foreground text-sm py-8">
-          <Icon name="file-text" :size="32" class="mx-auto mb-2 opacity-50" />
-          <p>No annotations yet</p>
-          <p class="text-xs mt-1">Use the tools to add annotations</p>
-        </div>
-        <div v-else class="space-y-2">
-          <div
-            v-for="(annotation, index) in annotations"
-            :key="`${annotation.type}-${index}`"
-            class="p-2 rounded-md border bg-card hover:bg-muted cursor-pointer group transition-colors"
-            :class="{ 'ring-2 ring-primary bg-muted': isSelected(annotation) }"
-            @click="emit('select-annotation', annotation)"
-          >
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 min-w-0">
-                <Icon :name="annotationIcons[annotation.type] || 'file'" :size="16" class="shrink-0" />
-                <input
-                  v-if="canRename(annotation)"
-                  class="trace-name-input"
-                  :value="annotation.data?.name || annotation.label"
-                  :aria-label="`${annotation.type} name`"
-                  @click.stop
-                  @focus="emit('select-annotation', annotation)"
-                  @change="handleAnnotationNameChange(annotation, $event)"
-                  @keydown.enter="$event.target.blur()"
-                />
-                <span v-else class="text-sm truncate">{{ annotation.label }}</span>
+      <TabsContent value="annotations" class="flex-1 min-h-0 p-0 mt-0">
+        <div ref="annotationsScrollEl" class="h-full overflow-y-auto p-3">
+          <div v-if="annotations.length === 0" class="text-center text-muted-foreground text-sm py-8">
+            <Icon name="file-text" :size="32" class="mx-auto mb-2 opacity-50" />
+            <p>No annotations yet</p>
+            <p class="text-xs mt-1">Use the tools to add annotations</p>
+          </div>
+          <div v-else class="space-y-2">
+            <div
+              v-for="(annotation, index) in annotations"
+              :key="`${annotation.type}-${index}`"
+              class="p-2 rounded-md border bg-card hover:bg-muted cursor-pointer group transition-colors"
+              :class="{ 'ring-2 ring-primary bg-muted': isSelected(annotation) }"
+              @click="emit('select-annotation', annotation)"
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2 min-w-0">
+                  <Icon :name="annotationIcons[annotation.type] || 'file'" :size="16" class="shrink-0" />
+                  <input
+                    v-if="canRename(annotation)"
+                    class="trace-name-input"
+                    :value="annotation.data?.name || annotation.label"
+                    :aria-label="`${annotation.type} name`"
+                    @click.stop
+                    @focus="emit('select-annotation', annotation)"
+                    @change="handleAnnotationNameChange(annotation, $event)"
+                    @keydown.enter="$event.target.blur()"
+                  />
+                  <span v-else class="text-sm truncate">{{ annotation.label }}</span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                  @click.stop="emit('delete-annotation', annotation)"
+                >
+                  <Icon name="trash-2" :size="14" />
+                </Button>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                class="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-                @click.stop="emit('delete-annotation', annotation)"
-              >
-                <Icon name="trash-2" :size="14" />
-              </Button>
             </div>
           </div>
         </div>
