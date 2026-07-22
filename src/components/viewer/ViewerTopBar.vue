@@ -45,6 +45,7 @@ const emit = defineEmits([
   'clear-comments',
   'clear-traces',
   'clear-angles',
+  'clear-distances',
   'clear-horizontal',
   'clear-vertical',
   'clear-all',
@@ -215,6 +216,7 @@ function handleThemeSelect(theme) {
             <DropdownMenuItem @click="emit('clear-comments'); clearDropdownOpen = false">Clear Comments</DropdownMenuItem>
             <DropdownMenuItem @click="emit('clear-traces'); clearDropdownOpen = false">Clear Traces</DropdownMenuItem>
             <DropdownMenuItem @click="emit('clear-angles'); clearDropdownOpen = false">Clear Angles</DropdownMenuItem>
+            <DropdownMenuItem @click="emit('clear-distances'); clearDropdownOpen = false">Clear Distances</DropdownMenuItem>
             <DropdownMenuItem @click="emit('clear-horizontal'); clearDropdownOpen = false">Clear Horizontal Bands</DropdownMenuItem>
             <DropdownMenuItem @click="emit('clear-vertical'); clearDropdownOpen = false">Clear Vertical Bands</DropdownMenuItem>
             <DropdownMenuSeparator />

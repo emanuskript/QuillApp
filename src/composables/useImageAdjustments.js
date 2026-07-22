@@ -53,6 +53,13 @@ export function useImageAdjustments() {
     return filtersByPage[page] || { ...DEFAULT_FILTERS }
   }
 
+  const getAllFilters = () => {
+    return Object.entries(filtersByPage).reduce((all, [page, filters]) => {
+      all[page] = { ...DEFAULT_FILTERS, ...filters }
+      return all
+    }, {})
+  }
+
   // Reset all filters for current page
   const resetFilters = () => {
     filtersByPage[currentPage.value] = { ...DEFAULT_FILTERS }
@@ -61,6 +68,15 @@ export function useImageAdjustments() {
   // Reset all filters for all pages
   const resetAllFilters = () => {
     Object.keys(filtersByPage).forEach(key => delete filtersByPage[key])
+  }
+
+  const replaceAllFilters = (nextFiltersByPage = {}) => {
+    resetAllFilters()
+    Object.entries(nextFiltersByPage || {}).forEach(([page, filters]) => {
+      if (filters && typeof filters === 'object') {
+        filtersByPage[page] = { ...DEFAULT_FILTERS, ...filters }
+      }
+    })
   }
 
   // Copy filters from current page to another page
@@ -89,8 +105,10 @@ export function useImageAdjustments() {
     hasActiveFilters,
     setFilter,
     getFiltersForPage,
+    getAllFilters,
     resetFilters,
     resetAllFilters,
+    replaceAllFilters,
     copyFiltersToPage,
     applyToAllPages,
     setCurrentPage,

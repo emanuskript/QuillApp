@@ -169,6 +169,9 @@ export function useSession() {
         deviceId: getDeviceId(),
         annotations: ann
       })
+      if (ws.isConnected.value) {
+        ws.send('annotations:replace', { annotations: ann })
+      }
     } catch (err) {
       error.value = err
       throw err
@@ -204,6 +207,10 @@ export function useSession() {
     ws.send('annotation:delete', { annotationType, annotationId, pageIndex })
   }
 
+  const updateSettings = (settings) => {
+    ws.send('settings:update', { settings })
+  }
+
   // ---- WS: generic message subscription ---------------------------------
   const onMessage = (type, callback) => ws.on(type, callback)
 
@@ -229,6 +236,7 @@ export function useSession() {
     addAnnotation,
     updateAnnotation,
     deleteAnnotation,
+    updateSettings,
     onMessage,
     send: ws.send,
     on: ws.on

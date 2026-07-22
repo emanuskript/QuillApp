@@ -27,6 +27,7 @@
         @clear-comments="clearComments"
         @clear-traces="clearTraces"
         @clear-angles="clearAngles"
+        @clear-distances="clearDistances"
         @clear-horizontal="clearHorizontalLengths"
         @clear-vertical="clearVerticalLengths"
         @clear-all="showClearConfirmation = true"
@@ -255,6 +256,64 @@
               {{ index + 1 }}
             </text>
           </g>
+          <!-- Distance construction guide -->
+          <g v-if="distanceModeActive && distancePoints.length === 1 && distanceGuideMousePos">
+            <line
+              :x1="distancePoints[0].x"
+              :y1="distancePoints[0].y"
+              :x2="distanceGuideMousePos.x"
+              :y2="distanceGuideMousePos.y"
+              stroke="#7c3aed"
+              :stroke-width="2 * svgInverseScale"
+              opacity="0.9"
+            />
+            <line
+              v-if="distanceAxisGuide"
+              :x1="distanceAxisGuide.x1"
+              :y1="distanceAxisGuide.y1"
+              :x2="distanceAxisGuide.x2"
+              :y2="distanceAxisGuide.y2"
+              stroke="#FFD700"
+              :stroke-width="1.5 * svgInverseScale"
+              :stroke-dasharray="(8*svgInverseScale)+','+(5*svgInverseScale)"
+              opacity="0.9"
+            />
+            <text
+              :x="(distancePoints[0].x + distanceGuideMousePos.x) / 2 + 10 * svgInverseScale"
+              :y="(distancePoints[0].y + distanceGuideMousePos.y) / 2 - 10 * svgInverseScale"
+              :font-size="14 * svgInverseScale"
+              font-weight="bold"
+              fill="#a855f7"
+              stroke="#000"
+              :stroke-width="0.5 * svgInverseScale"
+              paint-order="stroke"
+              pointer-events="none"
+            >
+              {{ formatDistanceBetween(distancePoints[0], distanceGuideMousePos, currentPage) }}
+            </text>
+          </g>
+
+          <!-- distance points (temp) with numbered labels -->
+          <g v-for="(point, index) in distancePoints" :key="'distance-point-' + index">
+            <circle
+              :cx="point.x"
+              :cy="point.y"
+              :r="6 * svgInverseScale"
+              fill="#7c3aed"
+              stroke="#FFF"
+              :stroke-width="2 * svgInverseScale"
+            />
+            <text
+              :x="point.x"
+              :y="point.y + 5 * svgInverseScale"
+              :font-size="10 * svgInverseScale"
+              font-weight="bold"
+              fill="#FFF"
+              text-anchor="middle"
+            >
+              {{ index + 1 }}
+            </text>
+          </g>
           <!-- saved angles -->
           <g
             v-for="(annotation, index) in currentPageAngles"
@@ -312,6 +371,52 @@
               :stroke-width="2 * svgInverseScale"
             />
             <!-- angle label moved to HTML overlay for drag support -->
+          </g>
+          <!-- saved distances -->
+          <g
+            v-for="(annotation, index) in currentPageDistances"
+            :key="'distance-' + (annotation.id || index)"
+            class="saved-distance-group"
+            :class="{
+              'is-selected': isSelectedAnnotation('distance', annotation),
+              'annotation-flash': isAnnotationFlashing('distance', annotation)
+            }"
+            @click.stop="selectDistanceFromPage(annotation, index)"
+            :aria-label="getAnnotationBankLabel('distance', annotation, index)"
+            @pointerenter="showAnnotationTooltip('distance', annotation, index, $event)"
+            @pointermove="moveAnnotationTooltip($event)"
+            @pointerleave="hideAnnotationTooltip"
+          >
+            <line
+              v-if="annotation.points && annotation.points.length >= 2"
+              class="distance-hit-target"
+              :x1="annotation.points[0].x"
+              :y1="annotation.points[0].y"
+              :x2="annotation.points[1].x"
+              :y2="annotation.points[1].y"
+              stroke="transparent"
+              :stroke-width="12 * svgInverseScale"
+            />
+            <line
+              v-if="annotation.points && annotation.points.length >= 2"
+              class="distance-line"
+              :x1="annotation.points[0].x"
+              :y1="annotation.points[0].y"
+              :x2="annotation.points[1].x"
+              :y2="annotation.points[1].y"
+              stroke="#7c3aed"
+              :stroke-width="2.5 * svgInverseScale"
+            />
+            <circle
+              v-for="(point, pointIndex) in (annotation.points || []).slice(0, 2)"
+              :key="'distance-endpoint-' + (annotation.id || index) + '-' + pointIndex"
+              :cx="point.x"
+              :cy="point.y"
+              :r="4 * svgInverseScale"
+              fill="#7c3aed"
+              stroke="#fff"
+              :stroke-width="1.5 * svgInverseScale"
+            />
           </g>
           <!-- dynamic freehand trace (calligraphic path) -->
           <path
@@ -457,6 +562,45 @@
             @pointerleave="hideAnnotationTooltip"
           >
             {{ annotation.angle }}°{{ annotation.label ? ' • ' + annotation.label : '' }}
+          </div>
+        </div>
+
+        <!-- Draggable distance labels -->
+        <div
+          v-for="annotation in currentPageDistances.filter(a => a.points && a.points.length >= 2)"
+          :key="'distance-label-' + annotation.id"
+          :style="{
+            left: `${(distanceMidpoint(annotation).x / osdImageWidth) * 100}%`,
+            top: `${(distanceMidpoint(annotation).y / osdImageHeight) * 100}%`,
+            position: 'absolute',
+            width: 0,
+            height: 0,
+            overflow: 'visible',
+          }"
+        >
+          <div
+            class="distance-label draggable-label"
+            :class="{
+              'is-selected': isSelectedAnnotation('distance', annotation),
+              'annotation-flash': isAnnotationFlashing('distance', annotation)
+            }"
+            :style="{
+              left: (distanceLabelPositions[annotation.id]?.x ?? 10) + 'px',
+              top: (distanceLabelPositions[annotation.id]?.y ?? -30) + 'px',
+              position: 'absolute',
+              cursor: draggedLabelIndex === annotation.id ? 'grabbing' : 'grab',
+              zIndex: 400,
+              userSelect: 'none',
+              pointerEvents: 'auto',
+            }"
+            @mousedown.stop="startDistanceLabelDrag(annotation.id, $event)"
+            @click.stop="selectDistanceFromPage(annotation, currentPageDistances.indexOf(annotation))"
+            :title="getAnnotationBankLabel('distance', annotation, currentPageDistances.indexOf(annotation))"
+            @pointerenter="showAnnotationTooltip('distance', annotation, currentPageDistances.indexOf(annotation), $event)"
+            @pointermove="moveAnnotationTooltip($event)"
+            @pointerleave="hideAnnotationTooltip"
+          >
+            {{ formatDistanceAnnotation(annotation, annotation.pageIndex ?? currentPage) }}{{ annotation.label ? ' • ' + annotation.label : '' }}
           </div>
         </div>
 
@@ -617,6 +761,17 @@
       :initial-label="activeAngleLabel"
       @confirm="onAngleLabelConfirm"
       @cancel="cancelAngleLabel"
+    />
+
+    <AngleLabelPopup
+      v-if="showDistanceLabelPopup"
+      :visible="showDistanceLabelPopup"
+      :labels="distanceLabels"
+      :initial-label="activeDistanceLabel"
+      title="Choose Distance Label"
+      placeholder="e.g., t height, stroke thickness, crossbar width"
+      @confirm="onDistanceLabelConfirm"
+      @cancel="cancelDistanceLabel"
     />
 
     <!-- Angle Statistics Filter Popup -->
@@ -1270,6 +1425,8 @@ export default {
       hasActiveFilters,
       setFilter,
       resetFilters,
+      getAllFilters,
+      replaceAllFilters,
       applyToAllPages,
       setCurrentPage: setAdjustmentPage
     } = useImageAdjustments();
@@ -1282,6 +1439,7 @@ export default {
       addAnnotation: syncAddAnnotation,
       updateAnnotation: syncUpdateAnnotation,
       deleteAnnotation: syncDeleteAnnotation,
+      updateSettings: syncSessionSettings,
       updateAnnotations: syncAllAnnotations,
       joinSession,
       leaveSession,
@@ -1323,6 +1481,8 @@ export default {
       hasActiveFilters,
       setFilter,
       resetFilters,
+      getAllFilters,
+      replaceAllFilters,
       applyToAllPages,
       setAdjustmentPage,
       // Session
@@ -1332,6 +1492,7 @@ export default {
       syncAddAnnotation,
       syncUpdateAnnotation,
       syncDeleteAnnotation,
+      syncSessionSettings,
       syncAllAnnotations,
       joinSession,
       leaveSession,
@@ -1387,7 +1548,10 @@ export default {
       pendingSessionId: null,
       sessionActive: false,
       annotationSyncUnsubscribe: null,
+      annotationsSnapshotUnsubscribe: null,
+      settingsSyncUnsubscribe: null,
       versionRestoredUnsubscribe: null,
+      isApplyingSessionSync: false,
       iiifManifest: '',
       jobId: null,
       remoteCursors: [],
@@ -1413,6 +1577,7 @@ export default {
       // Toggles / modes
       showTraces: true,
       measureModeActive: false,
+      distanceModeActive: false,
       traceModeActive: false,
       commentModeActive: false,
       highlightModeActive: false,
@@ -1455,6 +1620,8 @@ export default {
       draggingPoint: -1,      // index within measurePoints
       editingAnnotationIndex: -1,
       calculatedAngle: 0,
+      distancePoints: [],     // temp points for new straight distance measurement
+      distanceGuideMousePos: null,
       
       // Angle guides
       angleGuideMousePos: null,  // current mouse position for construction guides
@@ -1465,6 +1632,9 @@ export default {
       activeAngleLabel: null,
       angleLabels: [],           // list of strings (persist within session)
       newAngleLabel: "",
+      showDistanceLabelPopup: false,
+      activeDistanceLabel: null,
+      distanceLabels: [],        // list of strings (persist within session)
 
       // Angle stats filter
       showAngleFilterPopup: false,
@@ -1513,6 +1683,7 @@ export default {
       bandResizeState: null,
       bandResizeCorners: ['nw', 'ne', 'se', 'sw'],
       angleLabelPositions: {}, // for angle labels drag
+      distanceLabelPositions: {}, // for distance labels drag
       angleContextMenu: {
         visible: false,
         x: 0,
@@ -1672,7 +1843,7 @@ export default {
     // Returns true if any annotation tool is active (used for event intercept layer)
     isAnyToolActive() {
       return this.traceModeActive || this.highlightModeActive || this.underlineModeActive ||
-             this.measureModeActive || this.isMeasuring || this.moveModeActive ||
+             this.measureModeActive || this.distanceModeActive || this.isMeasuring || this.moveModeActive ||
              this.lengthMeasurementActive || this.croppingStarted || this.commentModeActive;
     },
 
@@ -1696,6 +1867,7 @@ export default {
       if (this.underlineModeActive) return 'underline';
       if (this.commentModeActive) return 'comment';
       if (this.measureModeActive) return 'measure';
+      if (this.distanceModeActive) return 'distance';
       if (this.lengthMeasurementActive || this.isMeasuring) {
         const label = this.selectedMeasurement || '';
         const isHorizontal = ['ascenders', 'descenders', 'interlinear', 'upperMargin', 'lowerMargin', 'lineHeight', 'minimumHeight', 'other_h'].includes(label);
@@ -1709,7 +1881,7 @@ export default {
     currentPageAnnotationsList() {
       const list = [];
       let fallbackOrder = 0;
-      const typeIndexes = { highlight: 0, underline: 0, trace: 0, angle: 0 };
+      const typeIndexes = { highlight: 0, underline: 0, trace: 0, angle: 0, distance: 0 };
       const addItem = (item, annotation) => {
         list.push({
           ...item,
@@ -1899,6 +2071,7 @@ export default {
     
     isAnyPopupOpen() {
       return this.showAngleLabelPopup || 
+             this.showDistanceLabelPopup ||
              this.showAngleFilterPopup || 
              this.showTracePopup || 
              this.showHorizontalPopup || 
@@ -1948,6 +2121,10 @@ export default {
       
       return strokes;
     },
+    distanceAxisGuide() {
+      if (!this.distanceModeActive || this.distancePoints.length !== 1 || !this.distanceGuideMousePos) return null;
+      return this.getDistanceAxisGuide(this.distancePoints[0], this.distanceGuideMousePos);
+    },
     currentPageAngles() {
       const angles = (this.annotationsByPage[this.currentPage] || []).filter(a => a.type === "measure");
       
@@ -1969,6 +2146,28 @@ export default {
       }
       
       return angles;
+    },
+    currentPageDistances() {
+      const distances = (this.annotationsByPage[this.currentPage] || []).filter(a => a.type === "distance");
+
+      // Apply movement delta if in move mode and annotations are selected
+      if (this.moveModeActive && (this.currentMoveDelta.x !== 0 || this.currentMoveDelta.y !== 0)) {
+        return distances.map((distance, index) => {
+          const key = `distance-${index}`;
+          if (this.bankSelectedKeys.includes(key)) {
+            return {
+              ...distance,
+              points: (distance.points || []).map(point => ({
+                x: point.x + this.currentMoveDelta.x,
+                y: point.y + this.currentMoveDelta.y
+              }))
+            };
+          }
+          return distance;
+        });
+      }
+
+      return distances;
     },
     currentPageLengthMeasurements() {
       const measurements = [];
@@ -2006,6 +2205,18 @@ export default {
             title: `Angle (${label}) (${num})`,
             subtitle: creatorSuffix.trim(),
             color: "#0d6efd", // blue accent for angles
+          });
+          return;
+        }
+
+        if (a.type === "distance") {
+          const label = a.label ? String(a.label) : "Unlabeled";
+          items.push({
+            key: `a:${i}`,
+            category: "distance",
+            title: `Distance (${label})`,
+            subtitle: `${this.formatDistanceAnnotation(a, a.pageIndex ?? this.currentPage)}${creatorSuffix}`,
+            color: "#7c3aed",
           });
           return;
         }
@@ -2091,7 +2302,7 @@ export default {
       };
     },
     croppedStageCursor() {
-      const toolActive = this.traceModeActive || this.measureModeActive || this.highlightModeActive || this.underlineModeActive;
+      const toolActive = this.traceModeActive || this.measureModeActive || this.distanceModeActive || this.highlightModeActive || this.underlineModeActive;
       if (toolActive) return 'crosshair';
       if (this.isCropPanning) return 'grabbing';
       if (this.cropZoom > 1) return 'grab';
@@ -2227,8 +2438,50 @@ export default {
         if (this.sessionConnected && !this.isApplyingFollowSync) {
           this.broadcastCurrentFilters();
         }
+        if (!this.isApplyingFollowSync) {
+          this.queueSessionSettingsSync();
+        }
       },
       deep: true
+    },
+    angleLabels: {
+      handler() {
+        this.queueSessionSettingsSync();
+      },
+      deep: true
+    },
+    distanceLabels: {
+      handler() {
+        this.queueSessionSettingsSync();
+      },
+      deep: true
+    },
+    angleLabelPositions: {
+      handler() {
+        this.queueSessionSettingsSync();
+      },
+      deep: true
+    },
+    distanceLabelPositions: {
+      handler() {
+        this.queueSessionSettingsSync();
+      },
+      deep: true
+    },
+    labelPositions: {
+      handler() {
+        this.queueSessionSettingsSync();
+      },
+      deep: true
+    },
+    measurementScalesByPage: {
+      handler() {
+        this.queueSessionSettingsSync();
+      },
+      deep: true
+    },
+    showMeasurementsInCm() {
+      this.queueSessionSettingsSync();
     },
     // Watch for incoming annotation changes from session
     sessionAnnotations: {
@@ -2328,6 +2581,11 @@ export default {
         this.dragAngleLabel(this.draggedLabelIndex, e);
       }
     };
+    this._onDistanceLabelDragMove = (e) => {
+      if (this.draggedLabelIndex !== null) {
+        this.dragDistanceLabel(this.draggedLabelIndex, e);
+      }
+    };
     
     // Initialize fit computation
     this.$nextTick(() => {
@@ -2380,6 +2638,14 @@ export default {
       this.annotationSyncUnsubscribe();
       this.annotationSyncUnsubscribe = null;
     }
+    if (this.annotationsSnapshotUnsubscribe) {
+      this.annotationsSnapshotUnsubscribe();
+      this.annotationsSnapshotUnsubscribe = null;
+    }
+    if (this.settingsSyncUnsubscribe) {
+      this.settingsSyncUnsubscribe();
+      this.settingsSyncUnsubscribe = null;
+    }
 
     // Clean up version restored subscription
     if (this.versionRestoredUnsubscribe) {
@@ -2421,6 +2687,10 @@ export default {
     if (this._angleMoveKeyDown) {
       window.removeEventListener('keydown', this._angleMoveKeyDown);
     }
+    if (this._onDistanceLabelDragMove) {
+      window.removeEventListener('mousemove', this._onDistanceLabelDragMove);
+      window.removeEventListener('mouseup', this.stopDistanceLabelDrag);
+    }
     if (this._angleMoveOutsideClick) {
       document.removeEventListener('mousedown', this._angleMoveOutsideClick, true);
     }
@@ -2441,6 +2711,12 @@ export default {
     }
     if (this._annotationFlashTimer) {
       clearTimeout(this._annotationFlashTimer);
+    }
+    if (this._sessionSettingsSyncTimer) {
+      clearTimeout(this._sessionSettingsSyncTimer);
+    }
+    if (this._sessionSnapshotSyncTimer) {
+      clearTimeout(this._sessionSnapshotSyncTimer);
     }
 
     // Clean up body class if component is destroyed while popup is open
@@ -2465,6 +2741,218 @@ export default {
       if (Number.isFinite(createdOrder) && createdOrder > 0) return createdOrder;
       const createdAt = Date.parse(annotation?.createdAt);
       return Number.isFinite(createdAt) ? createdAt * 1000 : 0;
+    },
+    beginApplyingSessionSync() {
+      this.isApplyingSessionSync = true;
+      if (this._sessionSettingsSyncTimer) {
+        clearTimeout(this._sessionSettingsSyncTimer);
+        this._sessionSettingsSyncTimer = null;
+      }
+      if (this._sessionSnapshotSyncTimer) {
+        clearTimeout(this._sessionSnapshotSyncTimer);
+        this._sessionSnapshotSyncTimer = null;
+      }
+    },
+    finishApplyingSessionSync() {
+      this.$nextTick(() => {
+        this.isApplyingSessionSync = false;
+      });
+    },
+    queueSessionSettingsSync() {
+      if (this.isApplyingSessionSync || !this.activeSessionId || !this.sessionConnected) return;
+
+      if (this._sessionSettingsSyncTimer) {
+        clearTimeout(this._sessionSettingsSyncTimer);
+      }
+
+      this._sessionSettingsSyncTimer = setTimeout(() => {
+        this._sessionSettingsSyncTimer = null;
+        if (this.isApplyingSessionSync || !this.activeSessionId || !this.sessionConnected) return;
+
+        try {
+          this.syncSessionSettings(this.getSharedSessionSettings());
+        } catch (error) {
+          console.error('Failed to sync shared session settings:', error);
+          this.showToolMessage('Session settings were kept locally, but sync failed.');
+        }
+      }, 250);
+    },
+    queueSessionSnapshotSync() {
+      if (this.isApplyingSessionSync || !this.activeSessionId) return;
+
+      if (this._sessionSnapshotSyncTimer) {
+        clearTimeout(this._sessionSnapshotSyncTimer);
+      }
+
+      this._sessionSnapshotSyncTimer = setTimeout(async () => {
+        this._sessionSnapshotSyncTimer = null;
+        if (this.isApplyingSessionSync || !this.activeSessionId) return;
+
+        try {
+          await this.syncAllAnnotations(this.getAllAnnotations());
+        } catch (error) {
+          console.error('Failed to sync shared session snapshot:', error);
+          this.showToolMessage('Changes were kept locally, but session sync failed.');
+        }
+      }, 400);
+    },
+    mergeUniqueLabels(labels = []) {
+      const seen = new Set();
+      return labels
+        .map(label => String(label || '').trim())
+        .filter(label => label && label !== 'Unlabeled')
+        .filter(label => {
+          const key = label.toLocaleLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+    },
+    collectAngleLabelsFromAnnotations(annotations = null) {
+      const labels = [];
+      const add = (annotation) => {
+        if (annotation?.label) labels.push(annotation.label);
+      };
+
+      if (annotations && typeof annotations === 'object') {
+        (annotations.angles || []).forEach(add);
+        (annotations.measures || []).forEach(add);
+        return this.mergeUniqueLabels(labels);
+      }
+
+      (this.annotationsByPage || []).forEach(page => {
+        (page || [])
+          .filter(annotation => annotation?.type === 'measure')
+          .forEach(add);
+      });
+      return this.mergeUniqueLabels(labels);
+    },
+    collectDistanceLabelsFromAnnotations(annotations = null) {
+      const labels = [];
+      const add = (annotation) => {
+        if (annotation?.label) labels.push(annotation.label);
+      };
+
+      if (annotations && typeof annotations === 'object') {
+        (annotations.distances || []).forEach(add);
+        return this.mergeUniqueLabels(labels);
+      }
+
+      (this.annotationsByPage || []).forEach(page => {
+        (page || [])
+          .filter(annotation => annotation?.type === 'distance')
+          .forEach(add);
+      });
+      return this.mergeUniqueLabels(labels);
+    },
+    addAngleLabelIfNeeded(label) {
+      const normalized = String(label || '').trim();
+      if (!normalized || normalized === 'Unlabeled') return;
+      if (!this.angleLabels.some(existing => String(existing || '').toLocaleLowerCase() === normalized.toLocaleLowerCase())) {
+        this.angleLabels.push(normalized);
+      }
+    },
+    addDistanceLabelIfNeeded(label) {
+      const normalized = String(label || '').trim();
+      if (!normalized || normalized === 'Unlabeled') return;
+      if (!this.distanceLabels.some(existing => String(existing || '').toLocaleLowerCase() === normalized.toLocaleLowerCase())) {
+        this.distanceLabels.push(normalized);
+      }
+    },
+    normalizePositionMap(map) {
+      if (!map || typeof map !== 'object' || Array.isArray(map)) return {};
+      return Object.entries(map).reduce((positions, [id, position]) => {
+        const x = Number(position?.x);
+        const y = Number(position?.y);
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          positions[id] = { x, y };
+        }
+        return positions;
+      }, {});
+    },
+    getSharedSessionSettings() {
+      return {
+        angleLabels: this.mergeUniqueLabels([
+          ...this.angleLabels,
+          ...this.collectAngleLabelsFromAnnotations()
+        ]),
+        distanceLabels: this.mergeUniqueLabels([
+          ...this.distanceLabels,
+          ...this.collectDistanceLabelsFromAnnotations()
+        ]),
+        angleLabelPositions: this.normalizePositionMap(this.angleLabelPositions),
+        distanceLabelPositions: this.normalizePositionMap(this.distanceLabelPositions),
+        labelPositions: this.normalizePositionMap(this.labelPositions),
+        measurementScalesByPage: (this.measurementScalesByPage || []).map(scale =>
+          scale && typeof scale === 'object' ? { ...scale } : null
+        ),
+        showMeasurementsInCm: !!this.showMeasurementsInCm,
+        imageFiltersByPage: typeof this.getAllFilters === 'function' ? this.getAllFilters() : {}
+      };
+    },
+    applySharedSessionSettings(settings = {}, annotations = null) {
+      const safeSettings = settings && typeof settings === 'object' && !Array.isArray(settings)
+        ? settings
+        : {};
+      const hasSetting = key => Object.prototype.hasOwnProperty.call(safeSettings, key);
+
+      if (hasSetting('angleLabels') || annotations) {
+        this.angleLabels = this.mergeUniqueLabels([
+          ...(Array.isArray(safeSettings.angleLabels) ? safeSettings.angleLabels : []),
+          ...this.collectAngleLabelsFromAnnotations(annotations)
+        ]);
+      }
+
+      if (hasSetting('angleLabelPositions') || annotations) {
+        this.angleLabelPositions = this.normalizePositionMap(safeSettings.angleLabelPositions);
+      }
+
+      if (hasSetting('distanceLabels') || annotations) {
+        this.distanceLabels = this.mergeUniqueLabels([
+          ...(Array.isArray(safeSettings.distanceLabels) ? safeSettings.distanceLabels : []),
+          ...this.collectDistanceLabelsFromAnnotations(annotations)
+        ]);
+      }
+
+      if (hasSetting('distanceLabelPositions') || annotations) {
+        this.distanceLabelPositions = this.normalizePositionMap(safeSettings.distanceLabelPositions);
+      }
+
+      if (hasSetting('labelPositions') || annotations) {
+        this.labelPositions = this.normalizePositionMap(safeSettings.labelPositions);
+      }
+
+      if (Array.isArray(safeSettings.measurementScalesByPage)) {
+        this.measurementScalesByPage = safeSettings.measurementScalesByPage.map(scale =>
+          scale && typeof scale === 'object' ? { ...scale } : null
+        );
+      }
+
+      if (typeof safeSettings.showMeasurementsInCm === 'boolean') {
+        this.showMeasurementsInCm = safeSettings.showMeasurementsInCm;
+      } else if (annotations) {
+        this.showMeasurementsInCm = false;
+      }
+
+      if (hasSetting('imageFiltersByPage') || annotations) {
+        this.replaceAllFilters(safeSettings.imageFiltersByPage || {});
+      }
+    },
+    handleRemoteAnnotationsSnapshot(payload) {
+      const { annotations, participantId } = payload || {};
+      if (!annotations || participantId === this.localParticipant?.id) return;
+      this.loadAnnotationsFromSession(annotations);
+    },
+    handleRemoteSettingsSync(payload) {
+      const { settings, participantId } = payload || {};
+      if (!settings || participantId === this.localParticipant?.id) return;
+
+      this.beginApplyingSessionSync();
+      try {
+        this.applySharedSessionSettings(settings);
+      } finally {
+        this.finishApplyingSessionSync();
+      }
     },
     async _readResponsePayload(response) {
       const text = await response.text();
@@ -2625,6 +3113,8 @@ export default {
       const type = this.normalizeAnnotationDisplayType(annotation?.type);
       if (type === 'highlight' || type === 'underline') {
         this.showToolMessage(`${annotation.label} selected. Use arrow keys to move it; hold Shift for larger steps.`);
+      } else if (type === 'distance') {
+        this.showToolMessage(`${annotation.label} selected. Use arrow keys to move it; hold Shift for larger steps.`);
       }
     },
     traceCenterlinePath(points = []) {
@@ -2647,6 +3137,17 @@ export default {
       };
       this.selectedAnnotationItem = item;
       this.showToolMessage(`${item.label} selected.`);
+    },
+    selectDistanceFromPage(distance, index = 0) {
+      if (this.isAnyToolActive || !distance) return;
+      const item = {
+        type: 'distance',
+        label: this.getAnnotationBankLabel('distance', distance, index),
+        data: distance,
+        index,
+      };
+      this.selectedAnnotationItem = item;
+      this.showToolMessage(`${item.label} selected. Use arrow keys to move it; hold Shift for larger steps.`);
     },
     selectRectAnnotationFromPage(type, annotation, index = 0) {
       if (this.isAnyToolActive || !annotation) return;
@@ -2676,6 +3177,7 @@ export default {
         highlight: 'highlights',
         underline: 'underlines',
         angle: 'measures',
+        distance: 'distances',
       };
       if (!target) return;
 
@@ -2748,6 +3250,12 @@ export default {
       if (normalizedType === 'angle') {
         if (annotation?.name) return annotation.name;
         return `${annotation?.angle}°${annotation?.label ? ' - ' + annotation.label : ''}`;
+      }
+      if (normalizedType === 'distance') {
+        if (annotation?.name) return annotation.name;
+        const pageIndex = Number.isInteger(annotation?.pageIndex) ? annotation.pageIndex : this.currentPage;
+        const label = annotation?.label ? `${annotation.label} - ` : '';
+        return `${label}${this.formatDistanceAnnotation(annotation, pageIndex)}`;
       }
       if (normalizedType === 'length') {
         if (annotation?.name) return annotation.name;
@@ -2859,6 +3367,14 @@ export default {
           }
           break;
         }
+        case 'distance': {
+          const distances = pageAnnotations.filter(a => a.type === 'distance');
+          if (distances[annotation.index]) {
+            this.deleteDistanceAnnotation(distances[annotation.index], this.currentPage);
+            return;
+          }
+          break;
+        }
         case 'length-h':
         case 'length-v':
           this.deleteLengthMeasurement(annotation.id);
@@ -2928,7 +3444,8 @@ export default {
     handleAngleMoveKeyDown(event) {
       const hasAngleSelection = this.keyboardMovingAngleId || this.keyboardMovingAngleRef;
       const hasRectSelection = this.isSelectedMovableRectAnnotation();
-      if (!hasAngleSelection && !hasRectSelection) return;
+      const hasPointSelection = this.isSelectedMovablePointAnnotation();
+      if (!hasAngleSelection && !hasRectSelection && !hasPointSelection) return;
 
       const target = event.target;
       const tagName = target?.tagName?.toLowerCase();
@@ -2937,7 +3454,7 @@ export default {
       if (event.key === 'Escape') {
         event.preventDefault();
         this.clearKeyboardMovingAngle();
-        if (hasRectSelection) this.selectedAnnotationItem = null;
+        if (hasRectSelection || hasPointSelection) this.selectedAnnotationItem = null;
         this.showToolMessage('Move selection cleared.');
         return;
       }
@@ -2956,6 +3473,8 @@ export default {
       event.preventDefault();
       if (hasAngleSelection) {
         this.moveSelectedAngleBy(delta[0], delta[1]);
+      } else if (hasPointSelection) {
+        this.moveSelectedPointAnnotationBy(delta[0], delta[1]);
       } else {
         this.moveSelectedRectAnnotationBy(delta[0], delta[1]);
       }
@@ -2964,6 +3483,11 @@ export default {
     isSelectedMovableRectAnnotation() {
       const type = this.normalizeAnnotationDisplayType(this.selectedAnnotationItem?.type);
       return type === 'highlight' || type === 'underline';
+    },
+
+    isSelectedMovablePointAnnotation() {
+      const type = this.normalizeAnnotationDisplayType(this.selectedAnnotationItem?.type);
+      return type === 'distance';
     },
 
     moveSelectedRectAnnotationBy(dx, dy) {
@@ -3016,6 +3540,70 @@ export default {
           this.syncAllAnnotations(this.getAllAnnotations()).catch(error => {
             console.error('Failed to persist annotation movement:', error);
             this.showToolMessage('Annotation moved locally, but session sync failed.');
+          });
+        }, 250);
+      }
+      return true;
+    },
+
+    moveSelectedPointAnnotationBy(dx, dy) {
+      const item = this.selectedAnnotationItem;
+      if (!item?.data || !this.isSelectedMovablePointAnnotation()) return false;
+
+      const type = this.normalizeAnnotationDisplayType(item.type);
+      const pageIndex = Number.isInteger(item.data.pageIndex) ? item.data.pageIndex : this.currentPage;
+      if (pageIndex !== this.currentPage) return false;
+
+      const pageAnnotations = this.annotationsByPage[pageIndex] || [];
+      const rawType = type;
+      const index = item.data.id
+        ? pageAnnotations.findIndex(annotation => annotation?.type === rawType && annotation.id === item.data.id)
+        : pageAnnotations.indexOf(item.data);
+      if (index === -1) {
+        this.selectedAnnotationItem = null;
+        return false;
+      }
+
+      const annotation = pageAnnotations[index];
+      if (!Array.isArray(annotation.points) || annotation.points.length === 0) return false;
+
+      const xs = annotation.points.map(point => Number(point.x) || 0);
+      const ys = annotation.points.map(point => Number(point.y) || 0);
+      const imageWidth = Number(this.osdImageWidth) || 0;
+      const imageHeight = Number(this.osdImageHeight) || 0;
+      const clampedDx = imageWidth
+        ? Math.max(-Math.min(...xs), Math.min(dx, imageWidth - Math.max(...xs)))
+        : dx;
+      const clampedDy = imageHeight
+        ? Math.max(-Math.min(...ys), Math.min(dy, imageHeight - Math.max(...ys)))
+        : dy;
+
+      if (clampedDx === 0 && clampedDy === 0) return false;
+      const points = annotation.points.map(point => ({
+        ...point,
+        x: (Number(point.x) || 0) + clampedDx,
+        y: (Number(point.y) || 0) + clampedDy,
+      }));
+      const updates = {
+        points,
+        lengthPx: points.length >= 2 ? this.distanceBetweenPoints(points[0], points[1]) : annotation.lengthPx,
+      };
+      const movedAnnotation = { ...annotation, ...updates };
+      pageAnnotations.splice(index, 1, movedAnnotation);
+      this.selectedAnnotationItem = {
+        ...item,
+        label: this.getAnnotationBankLabel(type, movedAnnotation, item.index),
+        data: movedAnnotation,
+      };
+
+      if (movedAnnotation.id && this.sessionConnected) {
+        this.syncUpdateAnnotation('distances', movedAnnotation.id, updates, pageIndex);
+      } else if (this.activeSessionId) {
+        clearTimeout(this._rectMovePersistTimer);
+        this._rectMovePersistTimer = setTimeout(() => {
+          this.syncAllAnnotations(this.getAllAnnotations()).catch(error => {
+            console.error('Failed to persist distance movement:', error);
+            this.showToolMessage('Distance moved locally, but session sync failed.');
           });
         }, 250);
       }
@@ -3115,6 +3703,42 @@ export default {
       }
 
       this.showToolMessage('Angle deleted.');
+      return true;
+    },
+
+    async deleteDistanceAnnotation(annotation, pageIndex = this.currentPage) {
+      if (!annotation) return false;
+      const pageAnnotations = this.annotationsByPage[pageIndex] || [];
+      const annotationId = annotation.id;
+      const index = annotationId
+        ? pageAnnotations.findIndex(a => a?.type === 'distance' && a.id === annotationId)
+        : pageAnnotations.indexOf(annotation);
+
+      if (index === -1) return false;
+
+      const [deletedDistance] = pageAnnotations.splice(index, 1);
+      if (deletedDistance?.id && this.distanceLabelPositions[deletedDistance.id]) {
+        delete this.distanceLabelPositions[deletedDistance.id];
+      }
+
+      this.bankSelectedKeys = [];
+      if (this.selectedAnnotationItem?.data?.id === deletedDistance?.id) {
+        this.selectedAnnotationItem = null;
+      }
+
+      if (deletedDistance?.id && this.sessionConnected) {
+        this.syncDeleteAnnotation('distances', deletedDistance.id, pageIndex);
+      } else if (this.activeSessionId) {
+        try {
+          await this.syncAllAnnotations(this.getAllAnnotations());
+        } catch (error) {
+          console.error('Failed to persist distance deletion:', error);
+          this.showToolMessage('Distance deleted locally, but session sync failed.');
+          return true;
+        }
+      }
+
+      this.showToolMessage('Distance deleted.');
       return true;
     },
 
@@ -3879,6 +4503,78 @@ export default {
       
       return { x, y };
     },
+    getDistanceAxisGuide(start, current) {
+      if (!start || !current) return null;
+      const snapThreshold = 8;
+      const verticalDist = Math.abs((Number(current.y) || 0) - (Number(start.y) || 0));
+      const horizontalDist = Math.abs((Number(current.x) || 0) - (Number(start.x) || 0));
+
+      if (verticalDist < snapThreshold) {
+        return {
+          type: 'horizontal',
+          x1: start.x,
+          y1: start.y,
+          x2: current.x,
+          y2: start.y,
+        };
+      }
+
+      if (horizontalDist < snapThreshold) {
+        return {
+          type: 'vertical',
+          x1: start.x,
+          y1: start.y,
+          x2: start.x,
+          y2: current.y,
+        };
+      }
+
+      return null;
+    },
+    pixelsPerCmForPage(pageIndex = this.currentPage, axis = 'x') {
+      const scale = this.measurementScalesByPage[pageIndex] || null;
+      const explicitValue = axis === 'y' ? scale?.pixelsPerCmY : scale?.pixelsPerCmX;
+      if (explicitValue) return explicitValue;
+
+      const physicalSize = axis === 'y' ? scale?.physicalHeightCm : scale?.physicalWidthCm;
+      const imageSize = pageIndex === this.currentPage
+        ? (axis === 'y' ? this.osdImageHeight : this.osdImageWidth)
+        : 0;
+      if (physicalSize && imageSize > 0) {
+        return imageSize / physicalSize;
+      }
+
+      return this.pixelsPerCm;
+    },
+    formatDistanceBetween(a, b, pageIndex = this.currentPage) {
+      const px = this.distanceBetweenPoints(a, b);
+      if (this.showMeasurementsInCm) {
+        const x1 = Number(a?.x);
+        const y1 = Number(a?.y);
+        const x2 = Number(b?.x);
+        const y2 = Number(b?.y);
+        if (![x1, y1, x2, y2].every(Number.isFinite)) return '0.0 cm';
+        const dxCm = (x2 - x1) / this.pixelsPerCmForPage(pageIndex, 'x');
+        const dyCm = (y2 - y1) / this.pixelsPerCmForPage(pageIndex, 'y');
+        return `${Math.hypot(dxCm, dyCm).toFixed(1)} cm`;
+      }
+      return `${Math.round(px)} px`;
+    },
+    formatDistanceAnnotation(annotation, pageIndex = this.currentPage) {
+      const points = annotation?.points || [];
+      if (points.length < 2) return '0 px';
+      return this.formatDistanceBetween(points[0], points[1], pageIndex);
+    },
+    distanceMidpoint(annotationOrPoints) {
+      const points = Array.isArray(annotationOrPoints)
+        ? annotationOrPoints
+        : (annotationOrPoints?.points || []);
+      if (points.length < 2) return { x: 0, y: 0 };
+      return {
+        x: ((Number(points[0].x) || 0) + (Number(points[1].x) || 0)) / 2,
+        y: ((Number(points[0].y) || 0) + (Number(points[1].y) || 0)) / 2,
+      };
+    },
     isHorizontalLabel(label) {
       return ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight","other_h"].includes(label);
     },
@@ -4084,6 +4780,7 @@ export default {
     resetAnnotationToolState() {
       this.traceModeActive = false;
       this.measureModeActive = false;
+      this.distanceModeActive = false;
       this.highlightModeActive = false;
       this.underlineModeActive = false;
       this.commentModeActive = false;
@@ -4101,6 +4798,8 @@ export default {
       this.moveStartPos = null;
       this.currentMoveDelta = { x: 0, y: 0 };
       this.measurePoints = [];
+      this.distancePoints = [];
+      this.distanceGuideMousePos = null;
       this.angleGuideMousePos = null;
       this.angleSnapGuide = null;
       this.draggingPoint = -1;
@@ -4108,6 +4807,7 @@ export default {
 
       this.showTracePopup = false;
       this.showAngleLabelPopup = false;
+      this.showDistanceLabelPopup = false;
       this.showHorizontalPopup = false;
       this.showVerticalPopup = false;
       this.showStatsPanel = false;
@@ -4171,6 +4871,21 @@ export default {
         this.resetAnnotationToolState();
         // open label chooser first
         this.showAngleLabelPopup = true;
+        return;
+      }
+
+      if (tool === "distance") {
+        // toggle
+        if (this.distanceModeActive) {
+          this.distanceModeActive = false;
+          this.distancePoints = [];
+          this.distanceGuideMousePos = null;
+          this.showToolMessage("Distance measurement mode deactivated.");
+          return;
+        }
+        this.resetAnnotationToolState();
+        // open label chooser first
+        this.showDistanceLabelPopup = true;
         return;
       }
 
@@ -4278,25 +4993,35 @@ export default {
 
     // Handler for angle label popup confirm
     onAngleLabelConfirm(label) {
-      if (!label) {
+      const normalizedLabel = String(label || '').trim();
+      if (!normalizedLabel) {
         this.showToolMessage("Choose or create a label first.");
         return;
       }
-      // Add to labels if new
-      if (!this.angleLabels.includes(label)) {
-        this.angleLabels.push(label);
-      }
+      this.addAngleLabelIfNeeded(normalizedLabel);
       this.resetAnnotationToolState();
-      this.activeAngleLabel = label;
+      this.activeAngleLabel = normalizedLabel;
       this.measureModeActive = true;
-      this.showToolMessage(`Angle measure: label "${label}". Click 3 points (A, vertex, B).`);
+      this.showToolMessage(`Angle measure: label "${normalizedLabel}". Click 3 points (A, vertex, B).`);
+    },
+    onDistanceLabelConfirm(label) {
+      const normalizedLabel = String(label || '').trim();
+      if (!normalizedLabel) {
+        this.showToolMessage("Choose or create a label first.");
+        return;
+      }
+      this.addDistanceLabelIfNeeded(normalizedLabel);
+      this.resetAnnotationToolState();
+      this.activeDistanceLabel = normalizedLabel;
+      this.distanceModeActive = true;
+      this.showToolMessage(`Distance measure: label "${normalizedLabel}". Click 2 points.`);
     },
 
     /* ---------- Angle label popup ---------- */
     confirmNewAngleLabel() {
       const label = (this.newAngleLabel || "").trim();
       if (!label) return;
-      if (!this.angleLabels.includes(label)) this.angleLabels.push(label);
+      this.addAngleLabelIfNeeded(label);
       this.activeAngleLabel = label;
       this.newAngleLabel = "";
     },
@@ -4317,6 +5042,13 @@ export default {
       this.measureModeActive = false;
       this.angleGuideMousePos = null;
       this.angleSnapGuide = null;
+    },
+    cancelDistanceLabel() {
+      this.activeDistanceLabel = null;
+      this.showDistanceLabelPopup = false;
+      this.distanceModeActive = false;
+      this.distancePoints = [];
+      this.distanceGuideMousePos = null;
     },
 
 confirmPenSelection() {
@@ -4663,17 +5395,20 @@ cancelPenSelection() {
     clearHighlights() {
       this.annotationsByPage[this.currentPage] = (this.annotationsByPage[this.currentPage] || [])
         .filter(a => a.type !== "highlight");
+      this.queueSessionSnapshotSync();
       this.showToolMessage("Highlights cleared.");
       this.showClearDropdown = false;
     },
     clearUnderlines() {
       this.annotationsByPage[this.currentPage] = (this.annotationsByPage[this.currentPage] || [])
         .filter(a => a.type !== "underline");
+      this.queueSessionSnapshotSync();
       this.showToolMessage("Underlines cleared.");
       this.showClearDropdown = false;
     },
     clearComments() {
       this.comments[this.currentPage] = [];
+      this.queueSessionSnapshotSync();
       this.showToolMessage("Comments cleared.");
       this.showClearDropdown = false;
     },
@@ -4690,14 +5425,35 @@ cancelPenSelection() {
           this.syncDeleteAnnotation('traces', trace.id, trace.pageIndex);
         });
       }
+      this.queueSessionSnapshotSync();
       
       this.showToolMessage("Traces cleared.");
       this.showClearDropdown = false;
     },
     clearAngles() {
+      const angleIds = (this.annotationsByPage[this.currentPage] || [])
+        .filter(a => a.type === "measure" && a.id)
+        .map(a => a.id);
       this.annotationsByPage[this.currentPage] = (this.annotationsByPage[this.currentPage] || [])
         .filter(a => a.type !== "measure");
+      angleIds.forEach(id => {
+        if (this.angleLabelPositions[id]) delete this.angleLabelPositions[id];
+      });
+      this.queueSessionSnapshotSync();
       this.showToolMessage("Angles cleared.");
+      this.showClearDropdown = false;
+    },
+    clearDistances() {
+      const distanceIds = (this.annotationsByPage[this.currentPage] || [])
+        .filter(a => a.type === "distance" && a.id)
+        .map(a => a.id);
+      this.annotationsByPage[this.currentPage] = (this.annotationsByPage[this.currentPage] || [])
+        .filter(a => a.type !== "distance");
+      distanceIds.forEach(id => {
+        if (this.distanceLabelPositions[id]) delete this.distanceLabelPositions[id];
+      });
+      this.queueSessionSnapshotSync();
+      this.showToolMessage("Distances cleared.");
       this.showClearDropdown = false;
     },
     clearHorizontalLengths() {
@@ -4705,6 +5461,7 @@ cancelPenSelection() {
         if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage];
       });
       this.clearBandResizeSelection();
+      this.queueSessionSnapshotSync();
       this.showToolMessage("Horizontal lengths cleared.");
       this.showClearDropdown = false;
     },
@@ -4713,6 +5470,7 @@ cancelPenSelection() {
         if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage];
       });
       this.clearBandResizeSelection();
+      this.queueSessionSnapshotSync();
       this.showToolMessage("Vertical lengths cleared.");
       this.showClearDropdown = false;
     },
@@ -4725,6 +5483,7 @@ cancelPenSelection() {
           if (idx !== -1) {
             pageArr.splice(idx, 1);
             if (String(this.selectedBandId) === String(id)) this.clearBandResizeSelection();
+            this.queueSessionSnapshotSync();
             this.showToolMessage("Measurement deleted.");
             return;
           }
@@ -4737,6 +5496,10 @@ cancelPenSelection() {
     },
     
     confirmClearAll() {
+      (this.annotationsByPage[this.currentPage] || []).forEach(annotation => {
+        if (annotation?.id && this.angleLabelPositions[annotation.id]) delete this.angleLabelPositions[annotation.id];
+        if (annotation?.id && this.distanceLabelPositions[annotation.id]) delete this.distanceLabelPositions[annotation.id];
+      });
       this.annotationsByPage[this.currentPage] = [];
       this.comments[this.currentPage] = [];
       const all = ["ascenders","descenders","interlinear","upperMargin","lowerMargin","internalMargin","intercolumnSpaces","externalMargin","lineHeight","minimumHeight","other_h","other_v"];
@@ -4745,6 +5508,7 @@ cancelPenSelection() {
       this.strokes = [];
       this.measurePoints = [];
       this.calculatedAngle = 0;
+      this.queueSessionSnapshotSync();
       this.showToolMessage("All annotations cleared.");
       this.showClearConfirmation = false;
     },
@@ -4803,8 +5567,12 @@ cancelPenSelection() {
         angles: annotationsByPage.flatMap((page, pageIndex) =>
           (page || []).filter(a => a.type === 'measure').map(a => ({ ...a, pageIndex }))
         ),
+        distances: annotationsByPage.flatMap((page, pageIndex) =>
+          (page || []).filter(a => a.type === 'distance').map(a => ({ ...a, pageIndex }))
+        ),
         horizontalBands,
-        verticalBands
+        verticalBands,
+        settings: this.getSharedSessionSettings()
       };
     },
 
@@ -4823,7 +5591,7 @@ cancelPenSelection() {
       try {
         const annotations = this.getAllAnnotations();
         const metadata = this.getExportMetadata();
-        const settings = { angleLabels: this.angleLabels };
+        const settings = this.getSharedSessionSettings();
 
         exportAsJson(annotations, metadata, settings, this.documentName);
         this.showToolMessage('Exported as JSON');
@@ -4879,11 +5647,7 @@ cancelPenSelection() {
     handleImportJson(data) {
       // Use existing loadAnnotationsFromSession()
       this.loadAnnotationsFromSession(data.annotations);
-
-      // Restore settings if present
-      if (data.settings?.angleLabels) {
-        this.angleLabels = data.settings.angleLabels;
-      }
+      this.applySharedSessionSettings(data.settings, data.annotations);
 
       this.showImportDialog = false;
       this.showToolMessage('Annotations imported successfully');
@@ -4907,6 +5671,12 @@ cancelPenSelection() {
       // Subscribe to remote annotation changes (same as handleJoinSession)
       this.annotationSyncUnsubscribe = this.onSessionMessage('annotation:sync', (payload) => {
         this.handleRemoteAnnotationSync(payload);
+      });
+      this.annotationsSnapshotUnsubscribe = this.onSessionMessage('annotations:sync', (payload) => {
+        this.handleRemoteAnnotationsSnapshot(payload);
+      });
+      this.settingsSyncUnsubscribe = this.onSessionMessage('settings:sync', (payload) => {
+        this.handleRemoteSettingsSync(payload);
       });
 
       // Subscribe to version restored events (from other participants)
@@ -5004,6 +5774,12 @@ cancelPenSelection() {
           this.annotationSyncUnsubscribe = this.onSessionMessage('annotation:sync', (payload) => {
             this.handleRemoteAnnotationSync(payload);
           });
+          this.annotationsSnapshotUnsubscribe = this.onSessionMessage('annotations:sync', (payload) => {
+            this.handleRemoteAnnotationsSnapshot(payload);
+          });
+          this.settingsSyncUnsubscribe = this.onSessionMessage('settings:sync', (payload) => {
+            this.handleRemoteSettingsSync(payload);
+          });
 
           // Subscribe to version restored events (from other participants)
           this.versionRestoredUnsubscribe = this.onSessionMessage('version:restored', (payload) => {
@@ -5028,102 +5804,145 @@ cancelPenSelection() {
       // Skip if this is our own change (we already applied it locally)
       if (participantId === this.localParticipant?.id) return;
 
-      const pageIndex = annotation?.pageIndex ?? payloadPageIndex ?? 0;
+      this.beginApplyingSessionSync();
 
-      // Ensure page array exists
-      if (!this.annotationsByPage[pageIndex]) {
-        this.annotationsByPage[pageIndex] = [];
-      }
-      if (!this.comments[pageIndex]) {
-        this.comments[pageIndex] = [];
-      }
+      try {
+        const pageIndex = annotation?.pageIndex ?? payloadPageIndex ?? 0;
+        const isAngleAnnotation =
+          annotationType === 'angles' ||
+          annotationType === 'measures' ||
+          annotationType === 'angle' ||
+          annotationType === 'measure';
+        const isDistanceAnnotation =
+          annotationType === 'distances' ||
+          annotationType === 'distance';
+        const isPageAnnotation =
+          annotationType === 'highlights' ||
+          annotationType === 'underlines' ||
+          annotationType === 'traces' ||
+          isDistanceAnnotation ||
+          isAngleAnnotation;
+        const commentChanged = annotationType === 'comments' && pageIndex === this.currentPage;
 
-      // Helper for band operations
-      const handleBand = (band) => {
-        const normalizedBand = this.normalizeBandAnnotation(band, band?.label, pageIndex);
-        const label = normalizedBand?.label;
-        if (!label) return;
-        if (!this.lengthMeasurements[label]) this.lengthMeasurements[label] = {};
-        if (!this.lengthMeasurements[label][pageIndex]) this.lengthMeasurements[label][pageIndex] = [];
-        return { arr: this.lengthMeasurements[label][pageIndex], normalizedBand };
-      };
+        // Ensure page array exists
+        if (!this.annotationsByPage[pageIndex]) {
+          this.annotationsByPage[pageIndex] = [];
+        }
+        if (!this.comments[pageIndex]) {
+          this.comments[pageIndex] = [];
+        }
 
-      switch (action) {
-        case 'add':
-          // Add createdBy field from the participantId
-          const annotationWithCreator = { ...annotation, createdBy: participantId };
-          
-          if (annotationType === 'highlights' || annotationType === 'underlines' || annotationType === 'measures' || annotationType === 'traces') {
-            this.annotationsByPage[pageIndex].push(annotationWithCreator);
-          } else if (annotationType === 'comments') {
-            this.comments[pageIndex].push(annotationWithCreator);
-          } else if (annotationType === 'horizontalBands' || annotationType === 'verticalBands') {
-            const handledBand = handleBand(annotationWithCreator);
-            if (handledBand?.arr && handledBand.normalizedBand) {
-              handledBand.arr.push(handledBand.normalizedBand);
-            }
-          }
-          break;
+        const normalizeIncomingPageAnnotation = (incoming) => {
+          const next = { ...incoming, createdBy: participantId };
+          if (isAngleAnnotation) next.type = 'measure';
+          if (isDistanceAnnotation) next.type = 'distance';
+          return next;
+        };
 
-        case 'update':
-          if (annotationType === 'highlights' || annotationType === 'underlines' || annotationType === 'measures' || annotationType === 'traces') {
-            const idx = this.annotationsByPage[pageIndex].findIndex(a => a.id === annotationId);
-            if (idx !== -1) {
-              this.annotationsByPage[pageIndex][idx] = {
-                ...this.annotationsByPage[pageIndex][idx],
-                ...updates
-              };
-            }
-          } else if (annotationType === 'comments') {
-            const idx = this.comments[pageIndex].findIndex(a => a.id === annotationId);
-            if (idx !== -1) {
-              this.comments[pageIndex][idx] = {
-                ...this.comments[pageIndex][idx],
-                ...updates
-              };
-            }
-          } else if (annotationType === 'horizontalBands' || annotationType === 'verticalBands') {
-            // Find band by id across all labels
-            for (const label in this.lengthMeasurements) {
-              const arr = this.lengthMeasurements[label]?.[pageIndex];
-              if (arr) {
-                const idx = arr.findIndex(b => b.id === annotationId);
-                if (idx !== -1) {
-                  arr[idx] = { ...arr[idx], ...updates };
-                  break;
+        // Helper for band operations
+        const handleBand = (band) => {
+          const normalizedBand = this.normalizeBandAnnotation(band, band?.label, pageIndex);
+          const label = normalizedBand?.label;
+          if (!label) return;
+          if (!this.lengthMeasurements[label]) this.lengthMeasurements[label] = {};
+          if (!this.lengthMeasurements[label][pageIndex]) this.lengthMeasurements[label][pageIndex] = [];
+          return { arr: this.lengthMeasurements[label][pageIndex], normalizedBand };
+        };
+
+        switch (action) {
+          case 'add': {
+            // Add createdBy field from the participantId
+            const annotationWithCreator = normalizeIncomingPageAnnotation(annotation);
+
+            if (isPageAnnotation) {
+              if (!annotationWithCreator.id || !this.annotationsByPage[pageIndex].some(a => a.id === annotationWithCreator.id)) {
+                this.annotationsByPage[pageIndex].push(annotationWithCreator);
+              }
+              if (isAngleAnnotation) this.addAngleLabelIfNeeded(annotationWithCreator.label);
+              if (isDistanceAnnotation) this.addDistanceLabelIfNeeded(annotationWithCreator.label);
+            } else if (annotationType === 'comments') {
+              if (!annotationWithCreator.id || !this.comments[pageIndex].some(c => c.id === annotationWithCreator.id)) {
+                this.comments[pageIndex].push(annotationWithCreator);
+              }
+            } else if (annotationType === 'horizontalBands' || annotationType === 'verticalBands') {
+              const handledBand = handleBand(annotationWithCreator);
+              if (handledBand?.arr && handledBand.normalizedBand) {
+                const id = handledBand.normalizedBand.id;
+                if (!id || !handledBand.arr.some(b => b.id === id)) {
+                  handledBand.arr.push(handledBand.normalizedBand);
                 }
               }
             }
+            break;
           }
-          break;
 
-        case 'delete':
-          if (annotationType === 'highlights' || annotationType === 'underlines' || annotationType === 'measures' || annotationType === 'traces') {
-            this.annotationsByPage[pageIndex] = this.annotationsByPage[pageIndex].filter(a => a.id !== annotationId);
-            if (annotationType === 'measures' && annotationId === this.keyboardMovingAngleId) {
-              this.clearKeyboardMovingAngle();
-            }
-          } else if (annotationType === 'comments') {
-            this.comments[pageIndex] = this.comments[pageIndex].filter(a => a.id !== annotationId);
-          } else if (annotationType === 'horizontalBands' || annotationType === 'verticalBands') {
-            // Find and remove band by id across all labels
-            for (const label in this.lengthMeasurements) {
-              const arr = this.lengthMeasurements[label]?.[pageIndex];
-              if (arr) {
-                const idx = arr.findIndex(b => b.id === annotationId);
-                if (idx !== -1) {
-                  arr.splice(idx, 1);
-                  break;
+          case 'update':
+            if (isPageAnnotation) {
+              const idx = this.annotationsByPage[pageIndex].findIndex(a => a.id === annotationId);
+              if (idx !== -1) {
+                this.annotationsByPage[pageIndex][idx] = {
+                  ...this.annotationsByPage[pageIndex][idx],
+                  ...updates
+                };
+                if (isAngleAnnotation) this.addAngleLabelIfNeeded(updates?.label);
+                if (isDistanceAnnotation) this.addDistanceLabelIfNeeded(updates?.label);
+              }
+            } else if (annotationType === 'comments') {
+              const idx = this.comments[pageIndex].findIndex(a => a.id === annotationId);
+              if (idx !== -1) {
+                this.comments[pageIndex][idx] = {
+                  ...this.comments[pageIndex][idx],
+                  ...updates
+                };
+              }
+            } else if (annotationType === 'horizontalBands' || annotationType === 'verticalBands') {
+              // Find band by id across all labels
+              for (const label in this.lengthMeasurements) {
+                const arr = this.lengthMeasurements[label]?.[pageIndex];
+                if (arr) {
+                  const idx = arr.findIndex(b => b.id === annotationId);
+                  if (idx !== -1) {
+                    arr[idx] = { ...arr[idx], ...updates };
+                    break;
+                  }
                 }
               }
             }
-          }
-          break;
-      }
+            break;
 
-      // Re-render comment overlays if a comment was changed on the current page
-      if (annotationType === 'comments' && pageIndex === this.currentPage) {
-        this.$nextTick(() => this.renderCommentOverlays());
+          case 'delete':
+            if (isPageAnnotation) {
+              this.annotationsByPage[pageIndex] = this.annotationsByPage[pageIndex].filter(a => a.id !== annotationId);
+              if (isAngleAnnotation && annotationId === this.keyboardMovingAngleId) {
+                this.clearKeyboardMovingAngle();
+              }
+              if (isDistanceAnnotation && this.distanceLabelPositions[annotationId]) {
+                delete this.distanceLabelPositions[annotationId];
+              }
+            } else if (annotationType === 'comments') {
+              this.comments[pageIndex] = this.comments[pageIndex].filter(a => a.id !== annotationId);
+            } else if (annotationType === 'horizontalBands' || annotationType === 'verticalBands') {
+              // Find and remove band by id across all labels
+              for (const label in this.lengthMeasurements) {
+                const arr = this.lengthMeasurements[label]?.[pageIndex];
+                if (arr) {
+                  const idx = arr.findIndex(b => b.id === annotationId);
+                  if (idx !== -1) {
+                    arr.splice(idx, 1);
+                    break;
+                  }
+                }
+              }
+            }
+            break;
+        }
+
+        // Re-render comment overlays if a comment was changed on the current page
+        if (commentChanged) {
+          this.$nextTick(() => this.renderCommentOverlays());
+        }
+      } finally {
+        this.finishApplyingSessionSync();
       }
     },
 
@@ -5217,6 +6036,9 @@ cancelPenSelection() {
     },
 
     loadAnnotationsFromSession(annotations) {
+      annotations = annotations || {};
+      this.beginApplyingSessionSync();
+
       // Clear current annotations
       this.annotationsByPage = [];
       this.comments = [];
@@ -5261,12 +6083,29 @@ cancelPenSelection() {
         });
       }
 
-      // Load angles
-      if (annotations.angles) {
-        annotations.angles.forEach(a => {
+      // Load angles. "measures" is the legacy websocket name for this same
+      // collection; saved sessions use the canonical "angles" key.
+      const angleRows = [
+        ...(Array.isArray(annotations.angles) ? annotations.angles : []),
+        ...(Array.isArray(annotations.measures) ? annotations.measures : [])
+      ];
+      const seenAngleIds = new Set();
+      if (angleRows.length) {
+        angleRows.forEach(a => {
+          if (a?.id && seenAngleIds.has(a.id)) return;
+          if (a?.id) seenAngleIds.add(a.id);
           const pageIndex = a.pageIndex || 0;
           if (!this.annotationsByPage[pageIndex]) this.annotationsByPage[pageIndex] = [];
           this.annotationsByPage[pageIndex].push({ ...a, type: 'measure' });
+        });
+      }
+
+      // Load straight distance measurements
+      if (Array.isArray(annotations.distances)) {
+        annotations.distances.forEach(distance => {
+          const pageIndex = distance.pageIndex || 0;
+          if (!this.annotationsByPage[pageIndex]) this.annotationsByPage[pageIndex] = [];
+          this.annotationsByPage[pageIndex].push({ ...distance, type: 'distance' });
         });
       }
 
@@ -5302,6 +6141,10 @@ cancelPenSelection() {
         });
         loadBands(legacyBands);
       }
+
+      this.applySharedSessionSettings(annotations.settings, annotations);
+      this.$nextTick(() => this.renderCommentOverlays());
+      this.finishApplyingSessionSync();
     },
 
     /* ---------- Label drag for length badges ---------- */
@@ -5347,6 +6190,28 @@ cancelPenSelection() {
       window.removeEventListener("mousemove", this._onAngleLabelDragMove);
       window.removeEventListener("mouseup", this.stopAngleLabelDrag);
     },
+    startDistanceLabelDrag(id, event) {
+      this.draggedLabelIndex = id;
+      const el = event.currentTarget;
+      const rect = el.getBoundingClientRect();
+      const parentRect = el.parentElement.getBoundingClientRect();
+      const currentX = rect.left - parentRect.left;
+      const currentY = rect.top - parentRect.top;
+      this.labelDragOffset = { x: event.clientX - currentX, y: event.clientY - currentY };
+      window.addEventListener("mousemove", this._onDistanceLabelDragMove);
+      window.addEventListener("mouseup", this.stopDistanceLabelDrag);
+    },
+    dragDistanceLabel(id, event) {
+      if (this.draggedLabelIndex !== id) return;
+      const x = event.clientX - this.labelDragOffset.x;
+      const y = event.clientY - this.labelDragOffset.y;
+      this.distanceLabelPositions[id] = { x, y };
+    },
+    stopDistanceLabelDrag() {
+      this.draggedLabelIndex = null;
+      window.removeEventListener("mousemove", this._onDistanceLabelDragMove);
+      window.removeEventListener("mouseup", this.stopDistanceLabelDrag);
+    },
 
     /* ---------- Paging ---------- */
     nextPage() {
@@ -5387,7 +6252,7 @@ cancelPenSelection() {
     startTrace(event) {
       // Check if any tool is active
       const toolActive = (
-        this.traceModeActive || this.measureModeActive || this.highlightModeActive ||
+        this.traceModeActive || this.measureModeActive || this.distanceModeActive || this.highlightModeActive ||
         this.underlineModeActive || this.lengthMeasurementActive || this.croppingStarted ||
         this.commentModeActive || this.moveModeActive
       );
@@ -5469,6 +6334,38 @@ cancelPenSelection() {
         return;
       }
 
+      // MEASURE DISTANCE
+      if (this.distanceModeActive) {
+        const { x, y } = this.getMousePosition(event);
+        if (this.distancePoints.length >= 2) return;
+        this.distancePoints.push({ x, y });
+        if (this.distancePoints.length === 2) {
+          if (!this.annotationsByPage[this.currentPage]) {
+            this.annotationsByPage[this.currentPage] = [];
+          }
+          const distance = {
+            id: safeUUID(),
+            ...this.creationMetadata(),
+            type: "distance",
+            pageIndex: this.currentPage,
+            points: [...this.distancePoints],
+            lengthPx: this.distanceBetweenPoints(this.distancePoints[0], this.distancePoints[1]),
+            label: this.activeDistanceLabel || "Unlabeled",
+            createdBy: this.localParticipant?.id || null,
+          };
+          this.annotationsByPage[this.currentPage].push(distance);
+          if (this.sessionConnected) {
+            this.syncAddAnnotation('distances', distance);
+          }
+          this.addDistanceLabelIfNeeded(this.activeDistanceLabel);
+          this.distancePoints = [];
+          this.distanceGuideMousePos = null;
+          this.isOperationInProgress = false;
+          this.setOsdMouseNavEnabled(true);
+        }
+        return;
+      }
+
       // MEASURE ANGLE
       if (this.measureModeActive) {
         const rawPos = this.getMousePosition(event);
@@ -5503,10 +6400,7 @@ cancelPenSelection() {
           if (this.sessionConnected) {
             this.syncAddAnnotation('measures', measure);
           }
-          // add label to list if new
-          if (this.activeAngleLabel && !this.angleLabels.includes(this.activeAngleLabel)) {
-            this.angleLabels.push(this.activeAngleLabel);
-          }
+          this.addAngleLabelIfNeeded(this.activeAngleLabel);
           this.measurePoints = [];
           this.angleGuideMousePos = null;
           this.angleSnapGuide = null;
@@ -5598,6 +6492,11 @@ cancelPenSelection() {
         this.currentStroke.points.push({ x, y });
       }
 
+      // DISTANCE: Update guide mouse position without snapping the actual endpoint
+      if (this.distanceModeActive && this.distancePoints.length === 1) {
+        this.distanceGuideMousePos = this.getMousePosition(event);
+      }
+
       // ANGLE: Update guide mouse position and check for snapping
       if (this.measureModeActive) {
         const { x, y } = this.getMousePosition(event);
@@ -5642,6 +6541,7 @@ cancelPenSelection() {
         const dx = endPos.x - this.moveStartPos.x;
         const dy = endPos.y - this.moveStartPos.y;
         this.applyMoveDelta(dx, dy);
+        this.queueSessionSnapshotSync();
         this.moveStartPos = null;
         this.currentMoveDelta = { x: 0, y: 0 };
         this.disableMoveMode();
@@ -5807,7 +6707,7 @@ cancelPenSelection() {
             if (a.type === "highlight" || a.type === "underline") {
               a.x = (a.x || 0) + dx; 
               a.y = (a.y || 0) + dy;
-            } else if (a.type === "trace" || a.type === "measure") {
+            } else if (a.type === "trace" || a.type === "measure" || a.type === "distance") {
               if (Array.isArray(a.points)) {
                 a.points = a.points.map((p) => ({ x: (p.x || 0) + dx, y: (p.y || 0) + dy }));
               }
@@ -5815,6 +6715,12 @@ cancelPenSelection() {
                 this.angleLabelPositions[a.id] = {
                   x: (this.angleLabelPositions[a.id].x || 0) + dx,
                   y: (this.angleLabelPositions[a.id].y || 0) + dy,
+                };
+              }
+              if (a.id && this.distanceLabelPositions[a.id]) {
+                this.distanceLabelPositions[a.id] = {
+                  x: (this.distanceLabelPositions[a.id].x || 0) + dx,
+                  y: (this.distanceLabelPositions[a.id].y || 0) + dy,
                 };
               }
             }
@@ -5892,6 +6798,9 @@ cancelPenSelection() {
             if (ann.id && this.angleLabelPositions[ann.id]) {
               delete this.angleLabelPositions[ann.id];
             }
+            if (ann.id && this.distanceLabelPositions[ann.id]) {
+              delete this.distanceLabelPositions[ann.id];
+            }
             this.annotationsByPage[page].splice(i, 1);
           }
         });
@@ -5928,6 +6837,7 @@ cancelPenSelection() {
 
       // Clear selection after successful deletion
       this.bankSelectedKeys = [];
+      this.queueSessionSnapshotSync();
       this.showToolMessage(`Deleted ${annIdxs.length + cmtIdxs.length + lengthIds.length} items.`);
     },
 
@@ -6506,7 +7416,7 @@ cancelPenSelection() {
       this._cPanStart = null;
     },
     cropStageWheel(event) {
-      const toolActive = this.traceModeActive || this.measureModeActive || this.highlightModeActive || this.underlineModeActive;
+      const toolActive = this.traceModeActive || this.measureModeActive || this.distanceModeActive || this.highlightModeActive || this.underlineModeActive;
       if (toolActive) return;
       const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
       this.zoomCropAt(factor, event.clientX, event.clientY);
@@ -6585,7 +7495,7 @@ cancelPenSelection() {
       e.preventDefault();
       e.stopPropagation();
       
-      const toolActive = this.traceModeActive || this.measureModeActive || this.highlightModeActive || this.underlineModeActive;
+      const toolActive = this.traceModeActive || this.measureModeActive || this.distanceModeActive || this.highlightModeActive || this.underlineModeActive;
       
       // Pan when zoomed and no tool active
       if (this.cropZoom > 1 && !toolActive) {
@@ -6724,10 +7634,7 @@ cancelPenSelection() {
             color: 'blue'
           });
           
-          // Add label to list if new (like main page)
-          if (this.activeAngleLabel && !this.angleLabels.includes(this.activeAngleLabel)) {
-            this.angleLabels.push(this.activeAngleLabel);
-          }
+          this.addAngleLabelIfNeeded(this.activeAngleLabel);
           
           // Clear the live measure
           this.croppedLive.measure = null;
@@ -7071,6 +7978,31 @@ cancelPenSelection() {
           return;
         }
 
+        if (annotation.type === 'distance' && Array.isArray(annotation.points) && annotation.points.length >= 2) {
+          const [start, end] = annotation.points;
+          ctx.strokeStyle = '#7c3aed';
+          ctx.fillStyle = '#7c3aed';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(start.x, start.y);
+          ctx.lineTo(end.x, end.y);
+          ctx.stroke();
+          [start, end].forEach(point => {
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 7, 0, Math.PI * 2);
+            ctx.fill();
+          });
+          const midpoint = this.distanceMidpoint(annotation);
+          this.drawExportLabel(
+            ctx,
+            `${this.formatDistanceAnnotation(annotation, pageIndex)}${annotation.label ? ' • ' + annotation.label : ''}`,
+            midpoint.x + 12,
+            Math.max(0, midpoint.y - 34),
+            { color: '#581c87', fontSize: 20 }
+          );
+          return;
+        }
+
         if (annotation.type === 'measure' && Array.isArray(annotation.points) && annotation.points.length >= 2) {
           ctx.strokeStyle = '#1d4ed8';
           ctx.lineWidth = 4;
@@ -7321,6 +8253,7 @@ cancelPenSelection() {
       const underlines = annotations.filter((annotation) => annotation?.type === 'underline');
       const traces = annotations.filter((annotation) => annotation?.type === 'trace');
       const angles = annotations.filter((annotation) => annotation?.type === 'measure');
+      const distances = annotations.filter((annotation) => annotation?.type === 'distance');
       const horizontalBands = bands.filter((band) => this.isHorizontalLabel(band?.label));
       const verticalBands = bands.filter((band) => !this.isHorizontalLabel(band?.label));
       const totalAnnotations = annotations.length + comments.length + bands.length;
@@ -7360,6 +8293,11 @@ cancelPenSelection() {
           '°'
         ),
         this.measurementRow(
+          'Distance measurements',
+          distances.map((annotation) => this.distanceBetweenPoints(annotation.points?.[0], annotation.points?.[1])),
+          'px'
+        ),
+        this.measurementRow(
           'Horizontal band height',
           horizontalBands.map((band) => this.annotationHeight(band)),
           'px'
@@ -7379,6 +8317,7 @@ cancelPenSelection() {
           { label: 'Underlines', value: underlines.length },
           { label: 'Traces', value: traces.length },
           { label: 'Angles', value: angles.length },
+          { label: 'Distances', value: distances.length },
           { label: 'Comments', value: comments.length },
           { label: 'Bands', value: bands.length },
         ],
@@ -7635,6 +8574,11 @@ cancelPenSelection() {
   cursor: pointer;
 }
 
+.annotation-overlay .drawing-layer .distance-hit-target {
+  pointer-events: stroke !important;
+  cursor: pointer;
+}
+
 .annotation-overlay .drawing-layer .trace-selection-group {
   pointer-events: auto !important;
   cursor: pointer;
@@ -7685,13 +8629,19 @@ cancelPenSelection() {
 .highlight-rectangle.annotation-flash,
 .underline-line.annotation-flash,
 .length-measurement.annotation-flash,
-.angle-label.annotation-flash {
+.angle-label.annotation-flash,
+.distance-label.annotation-flash {
   outline: 3px solid #facc15 !important;
   outline-offset: 3px;
   box-shadow: 0 0 0 5px rgb(250 204 21 / 0.35), 0 0 20px 8px rgb(250 204 21 / 0.65) !important;
 }
 
 .annotation-overlay .drawing-layer .saved-angle-group.annotation-flash .angle-line {
+  stroke: #facc15 !important;
+  filter: drop-shadow(0 0 7px #facc15);
+}
+
+.annotation-overlay .drawing-layer .saved-distance-group.annotation-flash .distance-line {
   stroke: #facc15 !important;
   filter: drop-shadow(0 0 7px #facc15);
 }
@@ -7730,6 +8680,11 @@ cancelPenSelection() {
 }
 
 .annotation-overlay .drawing-layer .saved-angle-group.is-keyboard-selected .angle-line {
+  stroke: #f59e0b;
+  filter: drop-shadow(0 0 3px rgb(245 158 11 / 0.8));
+}
+
+.annotation-overlay .drawing-layer .saved-distance-group.is-selected .distance-line {
   stroke: #f59e0b;
   filter: drop-shadow(0 0 3px rgb(245 158 11 / 0.8));
 }
@@ -7947,6 +8902,19 @@ cancelPenSelection() {
 }
 
 .angle-label.is-keyboard-selected {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+.distance-label {
+  position: absolute; left: 15px; top: 15px;
+  color: #f5d0fe; font-size: 14px; font-weight: bold;
+  background-color: rgba(0, 0, 0, 0.66); padding: 2px 6px; border-radius: 3px;
+  text-shadow: 0 0 2px #000;
+  white-space: nowrap;
+}
+
+.distance-label.is-selected {
   outline: 2px solid #f59e0b;
   outline-offset: 2px;
 }

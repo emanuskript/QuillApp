@@ -68,21 +68,28 @@ function sanitizeAnnotations(annotations) {
 
   const sanitized = { ...annotations }
 
+  if (sanitized.settings && typeof sanitized.settings === 'object') {
+    sanitized.settings = sanitizeObject(sanitized.settings)
+  }
+
   // Sanitize comment texts
   if (Array.isArray(sanitized.comments)) {
     sanitized.comments = sanitized.comments.map(comment => ({
       ...comment,
       text: comment.text ? sanitizeString(comment.text) : comment.text,
+      name: comment.name ? sanitizeString(comment.name) : comment.name,
       createdBy: comment.createdBy ? sanitizeString(comment.createdBy) : comment.createdBy
     }))
   }
 
   // Sanitize createdBy fields in all annotation types
-  const annotationTypes = ['highlights', 'underlines', 'traces', 'angles', 'horizontalBands', 'verticalBands']
+  const annotationTypes = ['highlights', 'underlines', 'traces', 'angles', 'measures', 'distances', 'horizontalBands', 'verticalBands']
   annotationTypes.forEach(type => {
     if (Array.isArray(sanitized[type])) {
       sanitized[type] = sanitized[type].map(item => ({
         ...item,
+        label: item.label ? sanitizeString(item.label) : item.label,
+        name: item.name ? sanitizeString(item.name) : item.name,
         createdBy: item.createdBy ? sanitizeString(item.createdBy) : item.createdBy
       }))
     }

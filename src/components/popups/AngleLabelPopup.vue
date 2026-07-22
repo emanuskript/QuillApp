@@ -2,13 +2,13 @@
   <Dialog :open="visible" @update:open="handleOpenChange">
     <DialogContent class="sm:max-w-2xl z-[60]" overlay-class="z-[60]">
       <DialogHeader>
-        <DialogTitle>Choose Angle Label</DialogTitle>
+        <DialogTitle>{{ title }}</DialogTitle>
       </DialogHeader>
 
       <div class="space-y-4 py-4">
         <!-- Existing Labels -->
         <div v-if="labels && labels.length">
-          <Label class="text-sm font-semibold mb-2 block">Existing Labels</Label>
+          <Label class="text-sm font-semibold mb-2 block">{{ existingLabel }}</Label>
           <RadioGroup v-model="selected" orientation="horizontal" class="flex flex-wrap gap-3">
             <div
               v-for="l in labels"
@@ -26,12 +26,12 @@
 
         <!-- Create New Label -->
         <div>
-          <Label class="text-sm font-semibold mb-2 block">Create New Label</Label>
+          <Label class="text-sm font-semibold mb-2 block">{{ createLabel }}</Label>
           <div class="flex gap-2">
             <Input
               v-model="newLabel"
               type="text"
-              placeholder="e.g., Main Hand, Corrector A, Line-end flourish"
+              :placeholder="placeholder"
               class="flex-1"
               @keyup.enter="confirmNew"
             />
@@ -79,6 +79,10 @@ export default {
     visible: { type: Boolean, default: false },
     labels: { type: Array, default: () => [] },
     initialLabel: { type: String, default: "" },
+    title: { type: String, default: "Choose Angle Label" },
+    existingLabel: { type: String, default: "Existing Labels" },
+    createLabel: { type: String, default: "Create New Label" },
+    placeholder: { type: String, default: "e.g., Main Hand, Corrector A, Line-end flourish" },
   },
   emits: ['confirm', 'cancel'],
   data() {

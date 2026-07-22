@@ -47,6 +47,7 @@ function normalizeAnnotations(annotations) {
     comments: [],
     traces: [],
     angles: [],
+    distances: [],
     horizontalBands: [],
     verticalBands: []
   }
@@ -57,6 +58,17 @@ function normalizeAnnotations(annotations) {
       result[type] = annotations[type]
     }
   })
+
+  // Collaboration websocket messages historically used "measures" for angle
+  // annotations. Treat it as an alias so older session snapshots still export.
+  if (annotations?.measures) {
+    result.angles = [
+      ...result.angles,
+      ...annotations.measures.filter(measure =>
+        !measure?.id || !result.angles.some(angle => angle?.id === measure.id)
+      )
+    ]
+  }
 
   return result
 }
@@ -159,6 +171,17 @@ function formatNum(val, decimals = 2) {
   return num.toFixed(decimals)
 }
 
+function distanceLengthPx(distance) {
+  const points = distance?.points || []
+  if (!Array.isArray(points) || points.length < 2) return Number(distance?.lengthPx) || 0
+  const x1 = Number(points[0]?.x)
+  const y1 = Number(points[0]?.y)
+  const x2 = Number(points[1]?.x)
+  const y2 = Number(points[1]?.y)
+  if (![x1, y1, x2, y2].every(Number.isFinite)) return Number(distance?.lengthPx) || 0
+  return Math.hypot(x2 - x1, y2 - y1)
+}
+
 /**
  * Build TEI XML export
  */
@@ -190,7 +213,7 @@ export function buildTeiExport(annotations, metadata) {
 
   // Group annotations by page
   const pageGroups = {}
-  const annotationTypes = ['comments', 'highlights', 'underlines', 'traces', 'angles', 'horizontalBands', 'verticalBands']
+  const annotationTypes = ['comments', 'highlights', 'underlines', 'traces', 'angles', 'distances', 'horizontalBands', 'verticalBands']
 
   annotationTypes.forEach(type => {
     (normalized[type] || []).forEach(ann => {
@@ -276,6 +299,19 @@ export function buildTeiExport(annotations, metadata) {
         })
       }
 
+      // Distances
+      if (pageData.distances?.length) {
+        pageData.distances.forEach(distance => {
+          const points = distance.points || []
+          const coordStr = points.slice(0, 2).map((p, i) => `p${i + 1}:${formatNum(p.x)},${formatNum(p.y)}`).join(' ')
+          xml += `        <measure type="distance" quantity="${formatNum(distanceLengthPx(distance), 2)}" unit="px">
+          <label>${escapeXml(distance.label || 'Distance')}</label>
+          <note type="coordinates">${coordStr}</note>
+        </measure>
+`
+        })
+      }
+
       // Horizontal bands
       if (pageData.horizontalBands?.length) {
         pageData.horizontalBands.forEach(band => {
@@ -342,7 +378,7 @@ Total Pages: ${metadata.totalPages || 'Unknown'}
 
   // Group annotations by page
   const pageGroups = {}
-  const annotationTypes = ['comments', 'highlights', 'underlines', 'traces', 'angles', 'horizontalBands', 'verticalBands']
+  const annotationTypes = ['comments', 'highlights', 'underlines', 'traces', 'angles', 'distances', 'horizontalBands', 'verticalBands']
 
   annotationTypes.forEach(type => {
     (normalized[type] || []).forEach(ann => {
@@ -360,6 +396,7 @@ Total Pages: ${metadata.totalPages || 'Unknown'}
     underlines: 0,
     traces: 0,
     angles: 0,
+    distances: 0,
     bands: 0
   }
 
@@ -444,6 +481,18 @@ ${'='.repeat(80)}
         text += '\n'
       }
 
+      // Distances
+      if (pageData.distances?.length) {
+        text += `DISTANCE MEASUREMENTS
+---------------------
+`
+        pageData.distances.forEach(distance => {
+          text += `- ${distance.label || 'Distance'}: ${formatNum(distanceLengthPx(distance), 2)} px\n`
+          totals.distances++
+        })
+        text += '\n'
+      }
+
       // Bands
       const hasBands = pageData.horizontalBands?.length || pageData.verticalBands?.length
       if (hasBands) {
@@ -482,6 +531,7 @@ Total Annotations: ${totalCount}
 - Underlines: ${totals.underlines}
 - Traces: ${totals.traces}
 - Angles: ${totals.angles}
+- Distances: ${totals.distances}
 - Bands: ${totals.bands}
 `
 
@@ -653,6 +703,32 @@ export function buildWebAnnotationExport(annotations, metadata) {
         selector: {
           type: 'SvgSelector',
           value: `<svg xmlns="http://www.w3.org/2000/svg"><path d="${pathData}" fill="none" stroke="#000" stroke-width="1"/></svg>`
+        }
+      }
+    ))
+  })
+
+  // Distances -> describing motivation
+  normalized.distances.forEach(distance => {
+    const canvasUrl = getCanvasUrl(metadata.iiifManifest, distance.pageIndex ?? 0)
+    const points = (distance.points || []).slice(0, 2)
+    const pathData = points.map((p, i) =>
+      `${i === 0 ? 'M' : 'L'}${formatNum(p.x)},${formatNum(p.y)}`
+    ).join(' ')
+
+    items.push(createAnnotation(
+      'describing',
+      {
+        type: 'TextualBody',
+        value: `${distance.label || 'Distance'}: ${formatNum(distanceLengthPx(distance), 2)} px`,
+        format: 'text/plain'
+      },
+      {
+        type: 'SpecificResource',
+        source: canvasUrl,
+        selector: {
+          type: 'SvgSelector',
+          value: `<svg xmlns="http://www.w3.org/2000/svg"><path d="${pathData}" fill="none" stroke="#7c3aed" stroke-width="1"/></svg>`
         }
       }
     ))

@@ -3,18 +3,49 @@ import { NotFoundError, PayloadTooLargeError } from '../utils/errors.js'
 import { config } from '../config/env.js'
 import { logger } from '../utils/logger.js'
 
+function mergeAnnotationArrays(primary = [], alias = []) {
+  const merged = Array.isArray(primary) ? [...primary] : []
+  const seenIds = new Set(merged.map(item => item?.id).filter(Boolean))
+
+  ;(Array.isArray(alias) ? alias : []).forEach(item => {
+    if (item?.id && seenIds.has(item.id)) return
+    if (item?.id) seenIds.add(item.id)
+    merged.push(item)
+  })
+
+  return merged
+}
+
+export function normalizeSessionAnnotations(annotations = {}) {
+  if (!annotations || typeof annotations !== 'object' || Array.isArray(annotations)) {
+    return {}
+  }
+
+  const normalized = { ...annotations }
+
+  // The frontend model calls angle annotations "measure", while exports and
+  // saved sessions call the same collection "angles". Store one canonical key.
+  if (Array.isArray(normalized.measures)) {
+    normalized.angles = mergeAnnotationArrays(normalized.angles, normalized.measures)
+    delete normalized.measures
+  }
+
+  return normalized
+}
+
 export const sessionService = {
   /**
    * Create a new session
    */
   async create({ iiifManifest, documentName, annotations = {}, deviceId }) {
     logger.info('Creating new session', { iiifManifest, documentName })
+    const normalizedAnnotations = normalizeSessionAnnotations(annotations)
 
     const session = await prisma.session.create({
       data: {
         iiifManifest,
         documentName: documentName || 'Untitled Document',
-        annotations,
+        annotations: normalizedAnnotations,
         creatorDeviceId: deviceId || null
       }
     })
@@ -38,15 +69,19 @@ export const sessionService = {
     // Update last active timestamp (don't await to avoid blocking)
     this.touch(id).catch(err => logger.error('Failed to update session activity', { sessionId: id, error: err.message }))
 
-    return session
+    return {
+      ...session,
+      annotations: normalizeSessionAnnotations(session.annotations)
+    }
   },
 
   /**
    * Update session annotations
    */
   async updateAnnotations(id, annotations) {
+    const normalizedAnnotations = normalizeSessionAnnotations(annotations)
     // Check payload size
-    const size = JSON.stringify(annotations).length
+    const size = JSON.stringify(normalizedAnnotations).length
     if (size > config.session.maxAnnotationsSize) {
       throw new PayloadTooLargeError(`Annotations exceed maximum size of ${config.session.maxAnnotationsSize / 1024 / 1024}MB`)
     }
@@ -54,7 +89,7 @@ export const sessionService = {
     const session = await prisma.session.update({
       where: { id },
       data: {
-        annotations,
+        annotations: normalizedAnnotations,
         lastActiveAt: new Date()
       }
     })

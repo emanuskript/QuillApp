@@ -32,6 +32,7 @@ const annotationIcons = {
   trace: 'pencil',
   comment: 'message-square',
   angle: 'triangle',
+  distance: 'ruler-dimension-line',
   'length-h': 'ruler',
   'length-v': 'move-vertical'
 }
@@ -71,6 +72,7 @@ function typeLabel(type) {
     trace: 'Trace',
     comment: 'Comment',
     angle: 'Angle',
+    distance: 'Distance',
     'length-h': 'Horizontal band',
     'length-v': 'Vertical band'
   }
@@ -141,6 +143,15 @@ function buildPropertyRows(annotationItem) {
 
   if (type === 'angle') {
     rows.push(['Angle', formatNumber(data.angle, '°')])
+    if (data.label) rows.push(['Label', data.label])
+    rows.push(['Points', String(pointCount(data))])
+  }
+
+  if (type === 'distance') {
+    const length = Array.isArray(data.points) && data.points.length >= 2
+      ? pathLength(data.points.slice(0, 2))
+      : Number(data.lengthPx) || 0
+    rows.push(['Distance', formatNumber(length, ' px')])
     if (data.label) rows.push(['Label', data.label])
     rows.push(['Points', String(pointCount(data))])
   }

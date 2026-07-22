@@ -1,9 +1,15 @@
 import { v4 as uuidv4 } from 'uuid'
-import { sessionService } from '../services/SessionService.js'
+import { sessionService, normalizeSessionAnnotations } from '../services/SessionService.js'
 import { presenceService } from '../services/PresenceService.js'
 import { sanitizeString, sanitizeObject } from '../middleware/sanitize.js'
 import { isValidUUID } from '../utils/validators.js'
 import { logger } from '../utils/logger.js'
+
+function canonicalAnnotationType(annotationType) {
+  return annotationType === 'measures' || annotationType === 'measure' || annotationType === 'angle'
+    ? 'angles'
+    : annotationType
+}
 
 /**
  * Handle incoming WebSocket messages
@@ -34,6 +40,12 @@ export async function handleMessage(ws, message, context) {
       break
     case 'annotation:delete':
       await handleAnnotationDelete(ws, payload, context)
+      break
+    case 'annotations:replace':
+      await handleAnnotationsReplace(ws, payload, context)
+      break
+    case 'settings:update':
+      await handleSettingsUpdate(ws, payload, context)
       break
     case 'ping':
       handlePing(ws, context)
@@ -167,20 +179,23 @@ async function handleAnnotationAdd(ws, payload, context) {
     sendError(ws, 'Missing annotation data')
     return
   }
+  const storageType = canonicalAnnotationType(annotationType)
 
   try {
     // Get current session
     const session = await sessionService.getById(sessionId)
-    const annotations = { ...session.annotations }
+    const annotations = normalizeSessionAnnotations(session.annotations)
 
     // Initialize array if doesn't exist
-    if (!annotations[annotationType]) {
-      annotations[annotationType] = []
+    if (!annotations[storageType]) {
+      annotations[storageType] = []
     }
 
     // Sanitize annotation and add
     const sanitizedAnnotation = sanitizeObject(annotation)
-    annotations[annotationType].push(sanitizedAnnotation)
+    if (!sanitizedAnnotation.id || !annotations[storageType].some(item => item?.id === sanitizedAnnotation.id)) {
+      annotations[storageType].push(sanitizedAnnotation)
+    }
 
     // Save to database
     await sessionService.updateAnnotations(sessionId, annotations)
@@ -190,7 +205,7 @@ async function handleAnnotationAdd(ws, payload, context) {
       type: 'annotation:sync',
       payload: {
         action: 'add',
-        annotationType,
+        annotationType: storageType,
         annotation: sanitizedAnnotation,
         participantId
       }
@@ -216,27 +231,28 @@ async function handleAnnotationUpdate(ws, payload, context) {
     sendError(ws, 'Missing annotation data')
     return
   }
+  const storageType = canonicalAnnotationType(annotationType)
 
   try {
     // Get current session
     const session = await sessionService.getById(sessionId)
-    const annotations = { ...session.annotations }
+    const annotations = normalizeSessionAnnotations(session.annotations)
 
-    if (!annotations[annotationType]) {
+    if (!annotations[storageType]) {
       sendError(ws, 'Annotation type not found')
       return
     }
 
     // Find and update the annotation
-    const index = annotations[annotationType].findIndex(a => a.id === annotationId)
+    const index = annotations[storageType].findIndex(a => a.id === annotationId)
     if (index === -1) {
       sendError(ws, 'Annotation not found')
       return
     }
 
     const sanitizedUpdates = sanitizeObject(updates)
-    annotations[annotationType][index] = {
-      ...annotations[annotationType][index],
+    annotations[storageType][index] = {
+      ...annotations[storageType][index],
       ...sanitizedUpdates
     }
 
@@ -248,7 +264,7 @@ async function handleAnnotationUpdate(ws, payload, context) {
       type: 'annotation:sync',
       payload: {
         action: 'update',
-        annotationType,
+        annotationType: storageType,
         annotationId,
         updates: sanitizedUpdates,
         pageIndex,
@@ -276,19 +292,20 @@ async function handleAnnotationDelete(ws, payload, context) {
     sendError(ws, 'Missing annotation data')
     return
   }
+  const storageType = canonicalAnnotationType(annotationType)
 
   try {
     // Get current session
     const session = await sessionService.getById(sessionId)
-    const annotations = { ...session.annotations }
+    const annotations = normalizeSessionAnnotations(session.annotations)
 
-    if (!annotations[annotationType]) {
+    if (!annotations[storageType]) {
       sendError(ws, 'Annotation type not found')
       return
     }
 
     // Remove the annotation
-    annotations[annotationType] = annotations[annotationType].filter(a => a.id !== annotationId)
+    annotations[storageType] = annotations[storageType].filter(a => a.id !== annotationId)
 
     // Save to database
     await sessionService.updateAnnotations(sessionId, annotations)
@@ -298,7 +315,7 @@ async function handleAnnotationDelete(ws, payload, context) {
       type: 'annotation:sync',
       payload: {
         action: 'delete',
-        annotationType,
+        annotationType: storageType,
         annotationId,
         pageIndex,
         participantId
@@ -307,6 +324,82 @@ async function handleAnnotationDelete(ws, payload, context) {
   } catch (err) {
     logger.error('Failed to delete annotation', { sessionId, error: err.message })
     sendError(ws, 'Failed to delete annotation')
+  }
+}
+
+/**
+ * Handle full annotation/settings snapshot replacement
+ */
+async function handleAnnotationsReplace(ws, payload, context) {
+  const { sessionId, participantId } = context
+  if (!sessionId || !participantId) {
+    sendError(ws, 'Not in a session')
+    return
+  }
+
+  const { annotations } = payload || {}
+  if (!annotations || typeof annotations !== 'object' || Array.isArray(annotations)) {
+    sendError(ws, 'Missing annotation snapshot')
+    return
+  }
+
+  try {
+    const sanitizedAnnotations = sanitizeObject(annotations)
+    const normalizedAnnotations = normalizeSessionAnnotations(sanitizedAnnotations)
+    const session = await sessionService.updateAnnotations(sessionId, normalizedAnnotations)
+
+    presenceService.broadcastAll(sessionId, {
+      type: 'annotations:sync',
+      payload: {
+        annotations: session.annotations,
+        participantId
+      }
+    })
+  } catch (err) {
+    logger.error('Failed to replace annotation snapshot', { sessionId, error: err.message })
+    sendError(ws, 'Failed to replace annotation snapshot')
+  }
+}
+
+/**
+ * Handle shared session settings updates
+ */
+async function handleSettingsUpdate(ws, payload, context) {
+  const { sessionId, participantId } = context
+  if (!sessionId || !participantId) {
+    sendError(ws, 'Not in a session')
+    return
+  }
+
+  const { settings } = payload || {}
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    sendError(ws, 'Missing settings data')
+    return
+  }
+
+  try {
+    const session = await sessionService.getById(sessionId)
+    const annotations = normalizeSessionAnnotations(session.annotations)
+    const sanitizedSettings = sanitizeObject(settings)
+    const nextAnnotations = {
+      ...annotations,
+      settings: {
+        ...(annotations.settings && typeof annotations.settings === 'object' ? annotations.settings : {}),
+        ...sanitizedSettings
+      }
+    }
+    const updatedSession = await sessionService.updateAnnotations(sessionId, nextAnnotations)
+
+    presenceService.broadcastAll(sessionId, {
+      type: 'settings:sync',
+      payload: {
+        settings: updatedSession.annotations.settings || {},
+        participantId
+      }
+    })
+  } catch (err) {
+    logger.error('Failed to update shared settings', { sessionId, error: err.message })
+    sendError(ws, 'Failed to update shared settings')
   }
 }
 
