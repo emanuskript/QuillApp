@@ -103,7 +103,7 @@ export function validateJsonImport(data) {
   // Version compatibility check
   if (data.version) {
     const [major] = data.version.split('.').map(Number)
-    if (major > 1) errors.push(`Incompatible version: ${data.version}. Please update QuillApp.`)
+    if (major > 1) errors.push(`Incompatible version: ${data.version}. Please update Seshat.`)
   }
 
   return { valid: errors.length === 0, errors, warnings }
@@ -197,7 +197,7 @@ export function buildTeiExport(annotations, metadata) {
         <title>Annotations: ${escapeXml(metadata.documentName || 'Untitled')}</title>
       </titleStmt>
       <publicationStmt>
-        <p>Exported from QuillApp</p>
+        <p>Exported from Seshat</p>
         <date>${date}</date>
       </publicationStmt>
       <sourceDesc>
@@ -368,7 +368,7 @@ export function buildPlainTextExport(annotations, metadata) {
   const normalized = normalizeAnnotations(annotations)
   const date = new Date().toISOString().replace('T', ' ').slice(0, 19)
 
-  let text = `QuillApp Annotations Export
+  let text = `Seshat Annotations Export
 Document: ${metadata.documentName || 'Untitled'}
 Exported: ${date}
 Source: ${metadata.iiifManifest || 'N/A'}

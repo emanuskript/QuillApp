@@ -91,7 +91,7 @@ async function processFile(file) {
     if (err.message.includes('too large')) {
       error.value = err.message
     } else {
-      error.value = 'Invalid JSON file. Please select a valid QuillApp export file.'
+      error.value = 'Invalid JSON file. Please select a valid Seshat export file.'
     }
   }
 }
@@ -135,7 +135,7 @@ function close() {
       <DialogHeader>
         <DialogTitle>Import Annotations</DialogTitle>
         <DialogDescription>
-          Select a QuillApp annotations file (.json) to restore your work.
+          Select a Seshat annotations file (.json) to restore your work.
         </DialogDescription>
       </DialogHeader>
 

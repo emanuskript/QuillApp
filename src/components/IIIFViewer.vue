@@ -499,7 +499,7 @@
               cursor: draggedLabelIndex === measurement.id ? 'grabbing' : 'grab',
               zIndex: 400,
               userSelect: 'none',
-              pointerEvents: 'auto',
+              pointerEvents: isAnyToolActive ? 'none' : 'auto',
             }"
             @mousedown.stop="startLabelDrag(measurement.id, $event)"
           >
@@ -551,7 +551,7 @@
               cursor: draggedLabelIndex === annotation.id ? 'grabbing' : 'grab',
               zIndex: 400,
               userSelect: 'none',
-              pointerEvents: 'auto',
+              pointerEvents: isAnyToolActive ? 'none' : 'auto',
             }"
             @mousedown.stop="startAngleLabelDrag(annotation.id, $event)"
             @click.stop="selectAngleForKeyboardMove(annotation)"
@@ -591,7 +591,7 @@
               cursor: draggedLabelIndex === annotation.id ? 'grabbing' : 'grab',
               zIndex: 400,
               userSelect: 'none',
-              pointerEvents: 'auto',
+              pointerEvents: isAnyToolActive ? 'none' : 'auto',
             }"
             @mousedown.stop="startDistanceLabelDrag(annotation.id, $event)"
             @click.stop="selectDistanceFromPage(annotation, currentPageDistances.indexOf(annotation))"

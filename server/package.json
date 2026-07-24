@@ -1,7 +1,7 @@
 {
   "name": "quillapp-server",
   "version": "1.0.0",
-  "description": "QuillApp collaboration server with session sharing and version history",
+  "description": "Seshat collaboration server with session sharing and version history",
   "type": "module",
   "main": "src/index.js",
   "scripts": {

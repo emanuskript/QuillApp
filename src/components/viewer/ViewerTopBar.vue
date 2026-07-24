@@ -172,7 +172,7 @@ function handleThemeSelect(theme) {
             <DropdownMenuItem @click="emit('export-json'); saveDropdownOpen = false">
               <Icon name="braces" :size="16" class="mr-2" />
               Export as JSON
-              <span class="ml-auto text-xs text-muted-foreground">QuillApp</span>
+              <span class="ml-auto text-xs text-muted-foreground">Seshat</span>
             </DropdownMenuItem>
             <DropdownMenuItem @click="emit('export-tei'); saveDropdownOpen = false">
               <Icon name="code" :size="16" class="mr-2" />

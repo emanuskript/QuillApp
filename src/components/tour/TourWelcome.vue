@@ -43,9 +43,9 @@ function handleOpenChange(open) {
         <div class="tour-welcome__icon">
           <Icon name="graduation-cap" :size="32" />
         </div>
-        <DialogTitle class="tour-welcome__title">Welcome to QuillApp!</DialogTitle>
+        <DialogTitle class="tour-welcome__title">Welcome to Seshat!</DialogTitle>
         <DialogDescription class="tour-welcome__description">
-          QuillApp helps you analyze and annotate manuscripts with powerful tools.
+          Seshat helps you analyze and annotate manuscripts with powerful tools.
           Would you like a quick tour of the main features?
         </DialogDescription>
       </DialogHeader>

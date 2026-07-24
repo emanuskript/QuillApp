@@ -44,7 +44,7 @@ export function initWebSocket(server) {
     // Send welcome message
     ws.send(JSON.stringify({
       type: 'welcome',
-      payload: { message: 'Connected to QuillApp collaboration server' }
+      payload: { message: 'Connected to Seshat collaboration server' }
     }))
   })
 

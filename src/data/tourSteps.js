@@ -6,8 +6,8 @@
 export const tourSteps = [
   {
     id: 'welcome',
-    title: 'Welcome to QuillApp',
-    content: 'QuillApp helps you analyze and annotate historical manuscripts with powerful tools. Let me show you around the main features.',
+    title: 'Welcome to Seshat',
+    content: 'Seshat helps you analyze and annotate historical manuscripts with powerful tools. Let me show you around the main features.',
     target: null, // Centered, no specific target
     placement: 'center',
     icon: 'book-open',
