@@ -40,6 +40,8 @@ env/
 # Runtime/upload files
 python-backend/uploads/
 python-backend/static/jobs/
+python-backend/static/runs/
+python-backend/static/static/
 
 # Claude Code
 .claude/
