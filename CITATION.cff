@@ -12,7 +12,7 @@ authors:
     affiliation: Georg-August-Universität Göttingen
     orcid: "https://orcid.org/0009-0004-7819-0622"
   - name: Alternative Bold Solutions UG
-version: 0.1.0
+version: 0.1.1
 date-released: "2026-07-24"
 license: Apache-2.0
 repository-code: "https://github.com/emanuskript/Seshat"
