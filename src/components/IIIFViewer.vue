@@ -108,7 +108,12 @@
         ></div>
 
         <!-- Annotation Overlay - positioned to match OSD viewport -->
-        <div v-show="osdReady && osdImageWidth > 0" class="annotation-overlay" :style="annotationOverlayStyle">
+        <div
+          v-show="osdReady && osdImageWidth > 0"
+          class="annotation-overlay"
+          :class="{ 'annotation-overlay--passthrough': isAnyToolActive }"
+          :style="annotationOverlayStyle"
+        >
 
         <!-- SVG drawing layer -->
         <svg
@@ -8609,6 +8614,11 @@ cancelPenSelection() {
 .underline-line.annotation-interactive {
   pointer-events: auto !important;
   cursor: pointer;
+}
+
+.annotation-overlay.annotation-overlay--passthrough,
+.annotation-overlay.annotation-overlay--passthrough * {
+  pointer-events: none !important;
 }
 
 .highlight-rectangle.is-selected,
