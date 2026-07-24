@@ -1,13 +1,16 @@
 # app.py
 from __future__ import annotations
 import os, io, json, uuid, time, shutil, logging
+import mimetypes
+import urllib.request
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import List, Dict, Tuple
 from datetime import datetime
 
 import cv2
 import numpy as np
-from flask import Flask, request, render_template, jsonify, abort, send_file
+from flask import Flask, request, render_template, jsonify, abort, send_file, Response
 from werkzeug.utils import secure_filename
 from flask_cors import CORS
 
@@ -52,6 +55,7 @@ JOBS_DIR = STATIC_DIR / "jobs"
 ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".pdf"}
 MAX_CONTENT_LENGTH = 60 * 1024 * 1024  # 60MB
 MAX_IMAGE_DIM = int(os.getenv("SESHAT_MAX_IMAGE_DIM", "0"))  # 0 = disabled
+EXPORT_IMAGE_MAX_BYTES = int(os.getenv("SESHAT_EXPORT_IMAGE_MAX_BYTES", str(80 * 1024 * 1024)))
 
 # ------------------ Morphological Line Segmentation ------------------
 def _ink_mask(binary: np.ndarray) -> np.ndarray:
@@ -641,6 +645,33 @@ def too_large(_e):
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
+
+@app.route("/export-image", methods=["GET"])
+def export_image_proxy():
+    image_url = (request.args.get("url") or "").strip()
+    parsed = urlparse(image_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return jsonify({"error": "A valid http(s) image URL is required."}), 400
+
+    try:
+        outbound = urllib.request.Request(
+            image_url,
+            headers={
+                "User-Agent": "Seshat/1.0 image-export",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            },
+        )
+        with urllib.request.urlopen(outbound, timeout=30) as response:
+            content_type = response.headers.get("Content-Type") or mimetypes.guess_type(parsed.path)[0] or "application/octet-stream"
+            payload = response.read(EXPORT_IMAGE_MAX_BYTES + 1)
+            if len(payload) > EXPORT_IMAGE_MAX_BYTES:
+                return jsonify({"error": "Image is too large for PDF export."}), 413
+            if not content_type.lower().startswith("image/"):
+                return jsonify({"error": f"URL did not return an image ({content_type})."}), 415
+            return Response(payload, mimetype=content_type, headers={"Cache-Control": "public, max-age=3600"})
+    except Exception as exc:
+        log.warning(f"Could not proxy export image {image_url}: {exc}")
+        return jsonify({"error": "Could not fetch image for PDF export."}), 502
 
 @app.route("/prepare", methods=["POST"])
 def prepare():

@@ -32,13 +32,15 @@ defineProps({
   documentName: { type: String, default: 'IIIF Document' },
   leftCollapsed: { type: Boolean, default: false },
   rightCollapsed: { type: Boolean, default: false },
-  sessionActive: { type: Boolean, default: false }
+  sessionActive: { type: Boolean, default: false },
+  pdfExporting: { type: Boolean, default: false }
 })
 
 const emit = defineEmits([
   'toggle-left',
   'toggle-right',
   'save',
+  'export-pdf-all',
   'go-home',
   'clear-highlights',
   'clear-underlines',
@@ -76,6 +78,16 @@ const themeConfig = {
 function handleThemeSelect(theme) {
   setTheme(theme)
   themeDropdownOpen.value = false
+}
+
+function handleAnnotatedPdfExport() {
+  emit('save')
+  saveDropdownOpen.value = false
+}
+
+function handleFullPdfExport() {
+  emit('export-pdf-all')
+  saveDropdownOpen.value = false
 }
 </script>
 
@@ -161,11 +173,22 @@ function handleThemeSelect(theme) {
               <Icon name="save" :size="18" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" class="w-56">
+          <DropdownMenuContent align="end" class="w-64">
             <DropdownMenuLabel>Export</DropdownMenuLabel>
-            <DropdownMenuItem @click="emit('save'); saveDropdownOpen = false">
+            <DropdownMenuItem
+              :disabled="pdfExporting"
+              @select="handleAnnotatedPdfExport"
+            >
               <Icon name="file-down" :size="16" class="mr-2" />
-              Download full annotated PDF
+              Annotated pages PDF
+              <span class="ml-auto text-xs text-muted-foreground">Annotated only</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              :disabled="pdfExporting"
+              @select="handleFullPdfExport"
+            >
+              <Icon name="files" :size="16" class="mr-2" />
+              Full document PDF
               <span class="ml-auto text-xs text-muted-foreground">All pages</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />

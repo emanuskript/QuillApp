@@ -121,8 +121,13 @@ export const versionService = {
 
     // If no versions exist, check if there are any annotations
     if (!lastVersion) {
-      const hasAnnotations = Object.values(session.annotations || {})
-        .some(arr => Array.isArray(arr) && arr.length > 0)
+      const hasAnnotations = Object.entries(session.annotations || {})
+        .some(([key, value]) => {
+          if (key === 'settings') {
+            return value && typeof value === 'object' && Object.keys(value).length > 0
+          }
+          return Array.isArray(value) && value.length > 0
+        })
       return { hasUnsavedChanges: hasAnnotations, lastVersion: null }
     }
 

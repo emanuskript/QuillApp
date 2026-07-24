@@ -18,9 +18,11 @@
         :left-collapsed="leftPanelCollapsed"
         :right-collapsed="rightPanelCollapsed"
         :session-active="sessionActive"
+        :pdf-exporting="isExportingPdf"
         @toggle-left="leftPanelCollapsed = !leftPanelCollapsed"
         @toggle-right="rightPanelCollapsed = !rightPanelCollapsed"
         @save="saveAnnotations"
+        @export-pdf-all="saveAnnotations('all')"
         @go-home="goHome"
         @clear-highlights="clearHighlights"
         @clear-underlines="clearUnderlines"
@@ -92,7 +94,7 @@
         <!-- Event Intercept Layer - captures events when tools are active -->
         <div
           v-show="isAnyToolActive"
-          class="absolute inset-0 z-10"
+          class="tool-interaction-layer absolute inset-0"
           :class="{ 'cursor-crosshair': isAnyToolActive }"
           @mousedown="startTrace($event)"
           @mousemove="trace($event)"
@@ -336,7 +338,7 @@
             @pointerleave="hideAnnotationTooltip"
           >
             <line
-              v-if="annotation.type === 'measure' && annotation.points.length >= 2"
+              v-if="!isAnyToolActive && annotation.type === 'measure' && annotation.points.length >= 2"
               class="angle-hit-target"
               :x1="annotation.points[0].x"
               :y1="annotation.points[0].y"
@@ -346,7 +348,7 @@
               :stroke-width="12 * svgInverseScale"
             />
             <line
-              v-if="annotation.type === 'measure' && annotation.points.length === 3"
+              v-if="!isAnyToolActive && annotation.type === 'measure' && annotation.points.length === 3"
               class="angle-hit-target"
               :x1="annotation.points[1].x"
               :y1="annotation.points[1].y"
@@ -393,7 +395,7 @@
             @pointerleave="hideAnnotationTooltip"
           >
             <line
-              v-if="annotation.points && annotation.points.length >= 2"
+              v-if="!isAnyToolActive && annotation.points && annotation.points.length >= 2"
               class="distance-hit-target"
               :x1="annotation.points[0].x"
               :y1="annotation.points[0].y"
@@ -1321,6 +1323,12 @@ import {
   exportAsPlainText,
   exportAsWebAnnotation
 } from "@/services/annotationExportService";
+import {
+  PDF_EXPORT_SCOPE,
+  formatPageCount,
+  pageHasExportableAnnotations,
+  selectPdfExportPages,
+} from "@/services/pdfExportUtils.mjs";
 import { useSession } from "@/composables/useSession";
 import { usePresence } from "@/composables/usePresence";
 import { useFollow } from "@/composables/useFollow";
@@ -1740,6 +1748,7 @@ export default {
       showAdjustmentsPanel: false,
       showClearConfirmation: false,
       toolMessage: "",
+      isExportingPdf: false,
 
       // Bank
       bankSelectedKeys: [],
@@ -1754,6 +1763,7 @@ export default {
       osdReady: false,       // Viewer initialized and image loaded
       osdImageWidth: 0,      // Image natural width from OSD
       osdImageHeight: 0,     // Image natural height from OSD
+      imageDimensionsByPage: {},
       osdViewportBounds: null, // For triggering overlay updates
       _overlayUpdatePending: false, // RAF throttle flag for overlay updates
       isOperationInProgress: false, // Lock to prevent tool switching during drawing
@@ -2509,6 +2519,7 @@ export default {
     this._composerOverlayEl = null;
     this._composerAnchorOverlayEl = null;
     this._composerImageCoords = { x: 0, y: 0 };
+    this._toolMessageTimer = null;
 
     // Handle session route - load from session API
     if (this.sessionId) {
@@ -2722,6 +2733,10 @@ export default {
     }
     if (this._sessionSnapshotSyncTimer) {
       clearTimeout(this._sessionSnapshotSyncTimer);
+    }
+    if (this._toolMessageTimer) {
+      clearTimeout(this._toolMessageTimer);
+      this._toolMessageTimer = null;
     }
 
     // Clean up body class if component is destroyed while popup is open
@@ -3861,6 +3876,10 @@ export default {
         const size = tiledImage.getContentSize();
         this.osdImageWidth = size.x;
         this.osdImageHeight = size.y;
+        this.imageDimensionsByPage[this.currentPage] = {
+          width: size.x,
+          height: size.y,
+        };
 
         // Also update legacy dimensions for compatibility
         this.baseFitWidth = size.x;
@@ -7068,6 +7087,62 @@ cancelPenSelection() {
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     },
+    isCanvasSafeImageUrl(url) {
+      if (!url) return false;
+      if (url.startsWith('data:') || url.startsWith('blob:')) return true;
+      try {
+        const parsed = new URL(url, window.location.href);
+        return parsed.origin === window.location.origin;
+      } catch (error) {
+        return false;
+      }
+    },
+    buildExportImageProxyUrl(url) {
+      if (!url || this.isCanvasSafeImageUrl(url)) return url;
+      return `${this._getBackendBase()}/export-image?url=${encodeURIComponent(url)}`;
+    },
+    getExportImageUrlCandidates(url) {
+      if (!url) return [];
+      const serviceId = extractServiceId(url);
+      const urls = serviceId
+        ? [
+            `${serviceId}/full/!2400,2400/0/default.jpg`,
+            `${serviceId}/full/max/0/default.jpg`,
+            `${serviceId}/full/full/0/default.jpg`,
+            url,
+          ]
+        : [url];
+
+      const candidates = [];
+      urls.forEach((candidateUrl) => {
+        if (!candidateUrl || candidates.includes(candidateUrl)) return;
+        candidates.push(candidateUrl);
+        const proxiedUrl = this.buildExportImageProxyUrl(candidateUrl);
+        if (proxiedUrl && proxiedUrl !== candidateUrl && !candidates.includes(proxiedUrl)) {
+          candidates.push(proxiedUrl);
+        }
+      });
+      return candidates;
+    },
+    async loadImageElementForCanvas(loadUrl) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        if (!loadUrl.startsWith('data:') && !loadUrl.startsWith('blob:')) {
+          img.crossOrigin = 'anonymous';
+        }
+        img.decoding = 'async';
+        const timer = window.setTimeout(() => reject(new Error('Timed out loading image for export')), 30000);
+        img.onload = () => {
+          window.clearTimeout(timer);
+          resolve(img);
+        };
+        img.onerror = () => {
+          window.clearTimeout(timer);
+          reject(new Error('Failed to load image for export'));
+        };
+        img.src = loadUrl;
+      });
+    },
     async _drawCroppedToCanvas(withAnnotations) {
       const loaded = await this.loadImageForCanvas(this.croppedImage);
       try {
@@ -7794,10 +7869,11 @@ cancelPenSelection() {
 
     /* ---------- Save to PDF ---------- */
     exportPageHasContent(pageIndex) {
-      const annotations = this.annotationsByPage[pageIndex] || [];
-      const comments = this.comments[pageIndex] || [];
-      const hasLengths = Object.values(this.lengthMeasurements).some(obj => (obj?.[pageIndex] || []).length > 0);
-      return annotations.length > 0 || comments.length > 0 || hasLengths;
+      return pageHasExportableAnnotations(pageIndex, {
+        annotationsByPage: this.annotationsByPage,
+        commentsByPage: this.comments,
+        lengthMeasurements: this.lengthMeasurements,
+      });
     },
     getPageLengthMeasurementsForExport(pageIndex) {
       const measurements = [];
@@ -7807,55 +7883,82 @@ cancelPenSelection() {
       });
       return measurements;
     },
-    safeExportFilename(extension) {
+    safeExportFilename(extension, suffix = '') {
       const safeName = (this.documentName || 'annotated-document')
         .replace(/[^a-zA-Z0-9_-]/g, '_')
         .replace(/_+/g, '_')
         .replace(/^_+|_+$/g, '')
         .substring(0, 50) || 'annotated-document';
+      const safeSuffix = String(suffix || '')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '');
       const date = new Date().toISOString().slice(0, 10);
-      return `${safeName}_${date}.${extension}`;
+      return `${safeName}${safeSuffix ? `_${safeSuffix}` : ''}_${date}.${extension}`;
     },
     async loadImageForCanvas(url) {
       if (!url) throw new Error('Missing image URL');
 
-      let objectUrl = null;
-      let loadUrl = url;
-      try {
-        const response = await fetch(url, { mode: 'cors', cache: 'force-cache' });
-        if (response.ok) {
+      let lastError = null;
+      const candidates = this.getExportImageUrlCandidates(url);
+
+      for (const candidateUrl of candidates) {
+        let objectUrl = null;
+        try {
+          if (candidateUrl.startsWith('data:') || candidateUrl.startsWith('blob:')) {
+            return {
+              image: await this.loadImageElementForCanvas(candidateUrl),
+              revoke: () => {},
+            };
+          }
+
+          const response = await fetch(candidateUrl, { mode: 'cors', cache: 'force-cache' });
+          if (!response.ok) {
+            throw new Error(`Image request failed (${response.status})`);
+          }
+
           const blob = await response.blob();
+          if (blob.type && !blob.type.toLowerCase().startsWith('image/')) {
+            throw new Error(`Export image response was ${blob.type}, not an image`);
+          }
+
           objectUrl = URL.createObjectURL(blob);
-          loadUrl = objectUrl;
+          const image = await this.loadImageElementForCanvas(objectUrl);
+          return {
+            image,
+            revoke: () => {
+              if (objectUrl) URL.revokeObjectURL(objectUrl);
+            },
+          };
+        } catch (error) {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+          lastError = error;
+          if (this.isCanvasSafeImageUrl(candidateUrl)) {
+            try {
+              return {
+                image: await this.loadImageElementForCanvas(candidateUrl),
+                revoke: () => {},
+              };
+            } catch (directError) {
+              lastError = directError;
+            }
+          }
         }
-      } catch (error) {
-        console.warn('Fetch image for export failed; trying direct image load.', error);
       }
 
-      const image = await new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.decoding = 'async';
-        const timer = window.setTimeout(() => reject(new Error('Timed out loading image for export')), 30000);
-        img.onload = () => {
-          window.clearTimeout(timer);
-          resolve(img);
-        };
-        img.onerror = () => {
-          window.clearTimeout(timer);
-          reject(new Error('Failed to load image for export'));
-        };
-        img.src = loadUrl;
-      });
-
-      return {
-        image,
-        revoke: () => {
-          if (objectUrl) URL.revokeObjectURL(objectUrl);
-        }
-      };
+      throw lastError || new Error('No exportable image source was available');
     },
-    async getExportSourceDimensions(imageUrl, image) {
+    async getExportSourceDimensions(imageUrl, image, pageIndex) {
+      const cachedDimensions = this.imageDimensionsByPage?.[pageIndex];
+      const cachedWidth = Number(cachedDimensions?.width);
+      const cachedHeight = Number(cachedDimensions?.height);
+      if (
+        Number.isFinite(cachedWidth) && cachedWidth > 0 &&
+        Number.isFinite(cachedHeight) && cachedHeight > 0
+      ) {
+        return { width: cachedWidth, height: cachedHeight };
+      }
+
       const serviceId = extractServiceId(imageUrl);
       if (serviceId) {
         try {
@@ -7863,6 +7966,7 @@ cancelPenSelection() {
           const width = Number(info?.width);
           const height = Number(info?.height);
           if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+            this.imageDimensionsByPage[pageIndex] = { width, height };
             return { width, height };
           }
         } catch (error) {
@@ -7873,13 +7977,14 @@ cancelPenSelection() {
       const naturalWidth = Number(image?.naturalWidth);
       const naturalHeight = Number(image?.naturalHeight);
       if (Number.isFinite(naturalWidth) && naturalWidth > 0 && Number.isFinite(naturalHeight) && naturalHeight > 0) {
+        this.imageDimensionsByPage[pageIndex] = {
+          width: naturalWidth,
+          height: naturalHeight,
+        };
         return { width: naturalWidth, height: naturalHeight };
       }
 
-      return {
-        width: Number(this.osdImageWidth) || 1200,
-        height: Number(this.osdImageHeight) || 1600
-      };
+      throw new Error('Could not determine the source image dimensions');
     },
     buildExportCanvas(width, height) {
       const maxDimension = 2400;
@@ -7889,29 +7994,68 @@ cancelPenSelection() {
       canvas.height = Math.max(1, Math.round(height * scale));
       return { canvas, scale };
     },
+    getExportVisualMetrics(sourceWidth, scale) {
+      const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+      const outputWidth = Math.max(1, Number(sourceWidth) * safeScale);
+      // The PDF is normally viewed fitted to a window. Target roughly the
+      // same 14px apparent label size as the website at common PDF zooms.
+      const labelFontOutputPx = Math.min(52, Math.max(28, outputWidth * 0.022));
+      const toSourceUnits = outputPixels => outputPixels / safeScale;
+
+      return {
+        labelFontSize: toSourceUnits(labelFontOutputPx),
+        secondaryFontSize: toSourceUnits(Math.max(24, labelFontOutputPx * 0.82)),
+        lineWidth: toSourceUnits(Math.max(5, labelFontOutputPx * 0.12)),
+        thinLineWidth: toSourceUnits(Math.max(3, labelFontOutputPx * 0.075)),
+        pointRadius: toSourceUnits(Math.max(7, labelFontOutputPx * 0.18)),
+        commentRadius: toSourceUnits(Math.max(12, labelFontOutputPx * 0.3)),
+        // Stored draggable-label offsets are website CSS pixels. Scale them
+        // with the exported font so their relative placement stays familiar.
+        websitePixel: toSourceUnits(labelFontOutputPx / 14),
+      };
+    },
+    async canvasToPngBytes(canvas) {
+      if (!canvas || typeof canvas.toBlob !== 'function') {
+        throw new Error('This browser cannot encode the PDF page image');
+      }
+
+      const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob((result) => {
+          if (result) {
+            resolve(result);
+          } else {
+            reject(new Error('Could not encode the PDF page image'));
+          }
+        }, 'image/png');
+      });
+
+      return new Uint8Array(await blob.arrayBuffer());
+    },
     drawExportLabel(ctx, text, x, y, options = {}) {
       const fontSize = options.fontSize || 24;
       ctx.save();
       ctx.font = `700 ${fontSize}px sans-serif`;
       ctx.textBaseline = 'top';
-      const paddingX = 8;
-      const paddingY = 5;
-      const metrics = ctx.measureText(text);
+      const paddingX = options.paddingX || Math.max(8, fontSize * 0.32);
+      const paddingY = options.paddingY || Math.max(5, fontSize * 0.18);
+      const labelText = String(text ?? '');
+      const metrics = ctx.measureText(labelText);
       const boxWidth = metrics.width + paddingX * 2;
       const boxHeight = fontSize + paddingY * 2;
       ctx.fillStyle = options.background || 'rgba(255,255,255,0.88)';
       ctx.fillRect(x, y, boxWidth, boxHeight);
       ctx.strokeStyle = options.border || 'rgba(0,0,0,0.18)';
-      ctx.lineWidth = 1;
+      ctx.lineWidth = Math.max(1, fontSize * 0.035);
       ctx.strokeRect(x, y, boxWidth, boxHeight);
       ctx.fillStyle = options.color || '#111827';
-      ctx.fillText(text, x + paddingX, y + paddingY);
+      ctx.fillText(labelText, x + paddingX, y + paddingY);
       ctx.restore();
     },
-    drawExportAnnotations(ctx, pageIndex, sourceWidth, sourceHeight) {
+    drawExportAnnotations(ctx, pageIndex, sourceWidth, sourceHeight, scale = 1) {
       const annotations = this.annotationsByPage[pageIndex] || [];
       const comments = this.comments[pageIndex] || [];
       const measurements = this.getPageLengthMeasurementsForExport(pageIndex);
+      const visual = this.getExportVisualMetrics(sourceWidth, scale);
 
       ctx.save();
       ctx.lineCap = 'round';
@@ -7921,7 +8065,7 @@ cancelPenSelection() {
         if (annotation.type === 'highlight') {
           ctx.fillStyle = annotation.color || 'rgba(255, 235, 59, 0.32)';
           ctx.strokeStyle = 'rgba(202, 138, 4, 0.85)';
-          ctx.lineWidth = 3;
+          ctx.lineWidth = visual.thinLineWidth;
           ctx.fillRect(annotation.x || 0, annotation.y || 0, annotation.width || 0, annotation.height || 0);
           ctx.strokeRect(annotation.x || 0, annotation.y || 0, annotation.width || 0, annotation.height || 0);
           if (annotation.name) {
@@ -7930,7 +8074,7 @@ cancelPenSelection() {
               this.getAnnotationBankLabel('highlight', annotation, index),
               Math.max(0, (annotation.x || 0) + 8),
               Math.max(0, (annotation.y || 0) - 30),
-              { fontSize: 18, color: '#854d0e' }
+              { fontSize: visual.secondaryFontSize, color: '#854d0e' }
             );
           }
           return;
@@ -7939,7 +8083,7 @@ cancelPenSelection() {
         if (annotation.type === 'underline') {
           const y = (annotation.y || 0) + Math.max(1, (annotation.height || 2) / 2);
           ctx.strokeStyle = annotation.color || '#dc2626';
-          ctx.lineWidth = Math.max(3, annotation.height || 3);
+          ctx.lineWidth = Math.max(visual.thinLineWidth, annotation.height || 3);
           ctx.beginPath();
           ctx.moveTo(annotation.x || 0, y);
           ctx.lineTo((annotation.x || 0) + (annotation.width || 0), y);
@@ -7950,7 +8094,7 @@ cancelPenSelection() {
               this.getAnnotationBankLabel('underline', annotation, index),
               Math.max(0, annotation.x || 0),
               Math.max(0, (annotation.y || 0) - 30),
-              { fontSize: 18, color: '#991b1b' }
+              { fontSize: visual.secondaryFontSize, color: '#991b1b' }
             );
           }
           return;
@@ -7977,7 +8121,7 @@ cancelPenSelection() {
               this.getAnnotationBankLabel('trace', annotation, index),
               Math.max(0, (Number(firstPoint.x) || 0) + 10),
               Math.max(0, (Number(firstPoint.y) || 0) - 30),
-              { fontSize: 18 }
+              { fontSize: visual.secondaryFontSize }
             );
           }
           return;
@@ -7987,30 +8131,35 @@ cancelPenSelection() {
           const [start, end] = annotation.points;
           ctx.strokeStyle = '#7c3aed';
           ctx.fillStyle = '#7c3aed';
-          ctx.lineWidth = 4;
+          ctx.lineWidth = visual.lineWidth;
           ctx.beginPath();
           ctx.moveTo(start.x, start.y);
           ctx.lineTo(end.x, end.y);
           ctx.stroke();
           [start, end].forEach(point => {
             ctx.beginPath();
-            ctx.arc(point.x, point.y, 7, 0, Math.PI * 2);
+            ctx.arc(point.x, point.y, visual.pointRadius, 0, Math.PI * 2);
             ctx.fill();
           });
           const midpoint = this.distanceMidpoint(annotation);
           this.drawExportLabel(
             ctx,
             `${this.formatDistanceAnnotation(annotation, pageIndex)}${annotation.label ? ' • ' + annotation.label : ''}`,
-            midpoint.x + 12,
-            Math.max(0, midpoint.y - 34),
-            { color: '#581c87', fontSize: 20 }
+            midpoint.x + 12 * visual.websitePixel,
+            Math.max(0, midpoint.y - 34 * visual.websitePixel),
+            {
+              color: '#f5d0fe',
+              background: 'rgba(0,0,0,0.72)',
+              border: 'rgba(255,255,255,0.35)',
+              fontSize: visual.labelFontSize,
+            }
           );
           return;
         }
 
         if (annotation.type === 'measure' && Array.isArray(annotation.points) && annotation.points.length >= 2) {
           ctx.strokeStyle = '#1d4ed8';
-          ctx.lineWidth = 4;
+          ctx.lineWidth = visual.lineWidth;
           ctx.beginPath();
           ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
           ctx.lineTo(annotation.points[1].x, annotation.points[1].y);
@@ -8020,12 +8169,24 @@ cancelPenSelection() {
           }
           ctx.stroke();
           if (annotation.points.length === 3) {
+            const storedPosition = this.angleLabelPositions?.[annotation.id];
+            const labelOffsetX = Number.isFinite(Number(storedPosition?.x))
+              ? Number(storedPosition.x)
+              : 10;
+            const labelOffsetY = Number.isFinite(Number(storedPosition?.y))
+              ? Number(storedPosition.y)
+              : -30;
             this.drawExportLabel(
               ctx,
               `${annotation.angle || this.calculateAngle(annotation.points[0], annotation.points[1], annotation.points[2])}°${annotation.label ? ' • ' + annotation.label : ''}`,
-              annotation.points[1].x + 12,
-              Math.max(0, annotation.points[1].y - 34),
-              { color: '#065f46', fontSize: 22 }
+              Math.max(0, annotation.points[1].x + labelOffsetX * visual.websitePixel),
+              Math.max(0, annotation.points[1].y + labelOffsetY * visual.websitePixel),
+              {
+                color: '#00ff87',
+                background: 'rgba(0,0,0,0.72)',
+                border: 'rgba(255,255,255,0.35)',
+                fontSize: visual.labelFontSize,
+              }
             );
           }
         }
@@ -8034,7 +8195,7 @@ cancelPenSelection() {
       measurements.forEach(measurement => {
         ctx.fillStyle = measurement.color || this.measurementColorFor(measurement.label);
         ctx.strokeStyle = this.measurementBorderFor(measurement);
-        ctx.lineWidth = 4;
+        ctx.lineWidth = visual.lineWidth;
         ctx.fillRect(measurement.x || 0, measurement.y || 0, measurement.width || 0, measurement.height || 0);
         ctx.strokeRect(measurement.x || 0, measurement.y || 0, measurement.width || 0, measurement.height || 0);
         const size = this.isHorizontalLabel(measurement.label) ? measurement.height : measurement.width;
@@ -8043,7 +8204,7 @@ cancelPenSelection() {
           `${this.camelToTitle(measurement.label)}: ${Math.round(size || 0)} px`,
           Math.min(sourceWidth - 20, (measurement.x || 0) + 12),
           Math.min(sourceHeight - 20, (measurement.y || 0) + 12),
-          { fontSize: 20 }
+          { fontSize: visual.labelFontSize }
         );
       });
 
@@ -8052,83 +8213,116 @@ cancelPenSelection() {
         const y = Number(comment.y) || 0;
         ctx.fillStyle = '#2563eb';
         ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 4;
+        ctx.lineWidth = visual.lineWidth;
         ctx.beginPath();
-        ctx.arc(x, y, 14, 0, Math.PI * 2);
+        ctx.arc(x, y, visual.commentRadius, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
-        this.drawExportLabel(ctx, comment.text || `Comment ${index + 1}`, x + 18, y + 8, { fontSize: 20 });
+        this.drawExportLabel(
+          ctx,
+          comment.text || `Comment ${index + 1}`,
+          x + 18 * visual.websitePixel,
+          y + 8 * visual.websitePixel,
+          { fontSize: visual.labelFontSize }
+        );
       });
 
       ctx.restore();
     },
     async renderAnnotatedPageCanvas(pageIndex) {
       const imageUrl = this.images[pageIndex];
-      let loaded = null;
-      let sourceDimensions = null;
+      const loaded = await this.loadImageForCanvas(imageUrl);
 
       try {
-        loaded = await this.loadImageForCanvas(imageUrl);
-        sourceDimensions = await this.getExportSourceDimensions(imageUrl, loaded.image);
-      } catch (error) {
-        console.warn(`Page ${pageIndex + 1} image could not be loaded for export; rendering annotations on blank page.`, error);
-        sourceDimensions = { width: Number(this.osdImageWidth) || 1200, height: Number(this.osdImageHeight) || 1600 };
-      }
+        const sourceDimensions = await this.getExportSourceDimensions(imageUrl, loaded.image, pageIndex);
+        const { width: sourceWidth, height: sourceHeight } = sourceDimensions;
+        const { canvas, scale } = this.buildExportCanvas(sourceWidth, sourceHeight);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Could not create a canvas for the PDF page');
 
-      const { width: sourceWidth, height: sourceHeight } = sourceDimensions;
-      const { canvas, scale } = this.buildExportCanvas(sourceWidth, sourceHeight);
-      const ctx = canvas.getContext('2d');
-
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      if (loaded?.image) {
-        ctx.drawImage(loaded.image, 0, 0, canvas.width, canvas.height);
-      } else {
-        ctx.fillStyle = '#f8fafc';
+        ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.strokeStyle = '#cbd5e1';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
-        this.drawExportLabel(ctx, `Page ${pageIndex + 1} image unavailable`, 32, 32, { fontSize: 28 });
+        ctx.drawImage(loaded.image, 0, 0, canvas.width, canvas.height);
+
+        ctx.save();
+        ctx.scale(scale, scale);
+        this.drawExportAnnotations(ctx, pageIndex, sourceWidth, sourceHeight, scale);
+        ctx.restore();
+
+        return canvas;
+      } finally {
+        loaded.revoke?.();
       }
-
-      ctx.save();
-      ctx.scale(scale, scale);
-      this.drawExportAnnotations(ctx, pageIndex, sourceWidth, sourceHeight);
-      ctx.restore();
-      loaded?.revoke?.();
-
-      return canvas;
     },
-    async saveAnnotations() {
-      const pagesToExport = this.images.map((_, pageIndex) => pageIndex);
-
-      if (!pagesToExport.length) {
-        this.showToolMessage('No document pages to export.');
+    async saveAnnotations(scope = PDF_EXPORT_SCOPE.ANNOTATED) {
+      if (this.isExportingPdf) {
+        this.showToolMessage('A PDF export is already in progress.');
         return;
       }
 
-      this.showToolMessage('Preparing full annotated PDF...');
+      const pagesToExport = selectPdfExportPages(
+        this.images.length,
+        {
+          annotationsByPage: this.annotationsByPage,
+          commentsByPage: this.comments,
+          lengthMeasurements: this.lengthMeasurements,
+        },
+        scope
+      );
+
+      if (!this.images.length) {
+        this.showToolMessage('No document pages to export.');
+        return;
+      }
+      if (!pagesToExport.length) {
+        this.showToolMessage('No annotated pages to export. Choose “Full document PDF” to include unannotated pages.', 5000);
+        return;
+      }
+
+      const annotatedOnly = scope === PDF_EXPORT_SCOPE.ANNOTATED;
+      const exportDescription = annotatedOnly ? 'annotated pages PDF' : 'full document PDF';
+      this.isExportingPdf = true;
+      this.showToolMessage(`Preparing ${exportDescription} (${formatPageCount(pagesToExport.length)})...`, 0);
 
       try {
         const pdfDoc = await PDFDocument.create();
 
-        for (const pageIndex of pagesToExport) {
-          const canvas = await this.renderAnnotatedPageCanvas(pageIndex);
-          const imgData = canvas.toDataURL('image/png');
-          const image = await pdfDoc.embedPng(imgData);
-          const page = pdfDoc.addPage([image.width, image.height]);
-          page.drawImage(image, { x: 0, y: 0, width: image.width, height: image.height });
+        for (let exportIndex = 0; exportIndex < pagesToExport.length; exportIndex += 1) {
+          const pageIndex = pagesToExport[exportIndex];
+          this.showToolMessage(
+            `Preparing ${exportDescription} (${exportIndex + 1}/${pagesToExport.length}, document page ${pageIndex + 1})...`,
+            0
+          );
+
+          let canvas = null;
+          try {
+            canvas = await this.renderAnnotatedPageCanvas(pageIndex);
+            const pngBytes = await this.canvasToPngBytes(canvas);
+            const image = await pdfDoc.embedPng(pngBytes);
+            const page = pdfDoc.addPage([image.width, image.height]);
+            page.drawImage(image, { x: 0, y: 0, width: image.width, height: image.height });
+          } catch (error) {
+            throw new Error(`Document page ${pageIndex + 1} could not be exported: ${error.message || 'unknown error'}`);
+          } finally {
+            if (canvas) {
+              canvas.width = 1;
+              canvas.height = 1;
+            }
+          }
         }
 
+        this.showToolMessage(`Finalizing ${exportDescription}...`, 0);
         const pdfBytes = await pdfDoc.save();
+        if (!pdfBytes?.length) throw new Error('The generated PDF was empty');
         const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-        this._downloadBlob(blob, this.safeExportFilename('pdf'));
-        this.showToolMessage(`Full annotated PDF exported (${pagesToExport.length} page${pagesToExport.length === 1 ? '' : 's'}).`);
+        const filenameSuffix = annotatedOnly ? 'annotated-pages' : 'full-document';
+        this._downloadBlob(blob, this.safeExportFilename('pdf', filenameSuffix));
+        this.showToolMessage(`${annotatedOnly ? 'Annotated pages' : 'Full document'} PDF exported (${formatPageCount(pagesToExport.length)}).`, 5000);
       } catch (error) {
         console.error('Error saving annotated PDF:', error);
-        this.showToolMessage('PDF export failed. Check the console for details.');
+        this.showToolMessage(`PDF export failed: ${error.message || 'could not load page image'}.`, 7000);
+      } finally {
+        this.isExportingPdf = false;
       }
     },
 
@@ -8392,9 +8586,18 @@ cancelPenSelection() {
     },
 
     /* ---------- Tool message ---------- */
-    showToolMessage(message) {
+    showToolMessage(message, duration = 3000) {
+      if (this._toolMessageTimer) {
+        clearTimeout(this._toolMessageTimer);
+        this._toolMessageTimer = null;
+      }
       this.toolMessage = message;
-      setTimeout(() => { this.toolMessage = ""; }, 3000);
+      if (Number.isFinite(duration) && duration > 0) {
+        this._toolMessageTimer = window.setTimeout(() => {
+          this.toolMessage = "";
+          this._toolMessageTimer = null;
+        }, duration);
+      }
     },
   },
 };
@@ -8554,6 +8757,12 @@ cancelPenSelection() {
   pointer-events: none;
   z-index: 10;
   overflow: visible;
+}
+
+.tool-interaction-layer {
+  z-index: 900;
+  pointer-events: auto;
+  touch-action: none;
 }
 
 .annotation-overlay > * {

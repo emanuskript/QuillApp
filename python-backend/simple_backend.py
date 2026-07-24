@@ -4,7 +4,10 @@ import os
 import shutil
 import cv2
 import json
-from flask import Flask, request, jsonify, url_for
+import mimetypes
+import urllib.request
+from urllib.parse import urlparse
+from flask import Flask, request, jsonify, url_for, Response
 from flask_cors import CORS
 import time
 import random
@@ -58,7 +61,7 @@ import logging
 
 # Update dynamic data directory handling to use /tmp as the final fallback
 def get_data_dir():
-    default_data_dir = "/data" if os.environ.get("SPACE_ID") else str(Path(__file__).parent / "static")
+    default_data_dir = "/data" if os.environ.get("SPACE_ID") else str(Path(__file__).parent)
     data_dir = Path(os.environ.get("PHAROSIGHT_DATA_DIR", default_data_dir))
 
     try:
@@ -80,7 +83,13 @@ RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 BASE_STATIC_DIR = Path(__file__).parent / "static"
 try:
-    if BASE_STATIC_DIR.exists():
+    base_static_resolved = BASE_STATIC_DIR.resolve()
+    static_root_resolved = STATIC_ROOT.resolve()
+    static_root_is_inside_base = (
+        static_root_resolved == base_static_resolved or
+        base_static_resolved in static_root_resolved.parents
+    )
+    if BASE_STATIC_DIR.exists() and not static_root_is_inside_base:
         shutil.copytree(BASE_STATIC_DIR, STATIC_ROOT, dirs_exist_ok=True)
 except Exception as exc:
     logging.warning(f"Could not sync bundled static assets: {exc}")
@@ -100,6 +109,7 @@ app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 logging.basicConfig(level=logging.INFO)
 
 MAX_IMAGE_DIM = int(os.getenv("PHAROSIGHT_MAX_IMAGE_DIM", "0"))
+EXPORT_IMAGE_MAX_BYTES = int(os.getenv("PHAROSIGHT_EXPORT_IMAGE_MAX_BYTES", str(80 * 1024 * 1024)))
 
 
 def _ensure_rgb(img: Image.Image) -> Image.Image:
@@ -1527,6 +1537,33 @@ def health():
 @app.route("/", methods=["GET"])
 def root():
     return jsonify({"ok": True, "ocr_available": OCR_AVAILABLE})
+
+@app.route("/export-image", methods=["GET"])
+def export_image_proxy():
+    image_url = (request.args.get("url") or "").strip()
+    parsed = urlparse(image_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return jsonify({"error": "A valid http(s) image URL is required."}), 400
+
+    try:
+        outbound = urllib.request.Request(
+            image_url,
+            headers={
+                "User-Agent": "Seshat/1.0 image-export",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            },
+        )
+        with urllib.request.urlopen(outbound, timeout=30) as response:
+            content_type = response.headers.get("Content-Type") or mimetypes.guess_type(parsed.path)[0] or "application/octet-stream"
+            payload = response.read(EXPORT_IMAGE_MAX_BYTES + 1)
+            if len(payload) > EXPORT_IMAGE_MAX_BYTES:
+                return jsonify({"error": "Image is too large for PDF export."}), 413
+            if not content_type.lower().startswith("image/"):
+                return jsonify({"error": f"URL did not return an image ({content_type})."}), 415
+            return Response(payload, mimetype=content_type, headers={"Cache-Control": "public, max-age=3600"})
+    except Exception as exc:
+        logging.warning(f"Could not proxy export image {image_url}: {exc}")
+        return jsonify({"error": "Could not fetch image for PDF export."}), 502
 
 # Removed get_consistent_scribe_results function - now using real detection only
 
