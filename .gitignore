@@ -43,3 +43,4 @@ python-backend/static/jobs/
 
 # Claude Code
 .claude/
+python-backend/static/
