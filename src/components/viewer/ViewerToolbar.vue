@@ -38,9 +38,9 @@ const toolGroups = [
     name: 'Measure',
     tools: [
       { id: 'measure', icon: 'chevron-up', label: 'Measure Angle', shortcut: 'A' },
-      { id: 'distance', icon: 'move-vertical', label: 'Measure Distance', shortcut: 'D' },
-      { id: 'horizontal', icon: 'ruler', label: 'Horizontal Bands', shortcut: '' },
-      { id: 'vertical', icon: 'ruler-dimension-line', label: 'Vertical Bands', shortcut: '' }
+      { id: 'distance', icon: 'ruler', label: 'Measure Distance', shortcut: 'D' },
+      { id: 'horizontal', icon: 'move-horizontal', label: 'Horizontal Bands', shortcut: '' },
+      { id: 'vertical', icon: 'move-vertical', label: 'Vertical Bands', shortcut: '' }
     ]
   },
   {
